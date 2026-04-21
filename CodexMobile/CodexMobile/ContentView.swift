@@ -333,6 +333,27 @@ struct ContentView: View {
     }
 
     private var mainAppBody: some View {
+        #if os(macOS)
+        HStack(spacing: 0) {
+            SidebarView(
+                selectedThread: $selectedThread,
+                showSettings: $showSettings,
+                isSearchActive: $isSearchActive,
+                showsInlineCloseButton: false,
+                isVisible: true,
+                onClose: {},
+                onOpenThread: { thread in
+                    openThreadFromSidebar(thread)
+                }
+            )
+            .frame(width: sidebarWidth)
+
+            Divider()
+
+            mainNavigationLayer
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+        }
+        #else
         GeometryReader { proxy in
             let currentSidebarWidth = effectiveSidebarWidth(for: proxy.size.width)
             let currentSidebarRevealWidth = sidebarRevealWidth(for: currentSidebarWidth)
@@ -377,6 +398,7 @@ struct ContentView: View {
             }
         }
         .simultaneousGesture(edgeDragGesture)
+        #endif
     }
 
     // MARK: - Layers
@@ -410,9 +432,11 @@ struct ContentView: View {
                 })
                 .environment(\.wakeMacDisplayAction, wakeMacDisplayRecoveryAction)
                 .toolbar {
+                    #if os(iOS)
                     ToolbarItem(placement: .automatic) {
                         hamburgerButton
                     }
+                    #endif
                 }
         } else {
             HomeEmptyStateView(
@@ -453,9 +477,11 @@ struct ContentView: View {
                 }
             }
             .toolbar {
+                #if os(iOS)
                 ToolbarItem(placement: .automatic) {
                     hamburgerButton
                 }
+                #endif
             }
         }
     }
@@ -465,14 +491,15 @@ struct ContentView: View {
             HapticFeedback.shared.triggerImpactFeedback(style: .light)
             toggleSidebar()
         } label: {
-            TwoLineHamburgerIcon()
+            Image(systemName: "sidebar.leading")
+                .font(.system(size: 16, weight: .semibold))
                 .foregroundStyle(colorScheme == .dark ? Color.white : Color.black)
                 .padding(8)
                 .contentShape(Circle())
                 .adaptiveToolbarItem(in: Circle())
         }
         .buttonStyle(.plain)
-        .accessibilityLabel("Menu")
+        .accessibilityLabel("Toggle Sidebar")
     }
 
     private var manualPairingErrorAlertIsPresented: Binding<Bool> {
@@ -1380,19 +1407,6 @@ struct ContentView: View {
            let first = threads.first {
             selectedThread = first
         }
-    }
-}
-
-struct TwoLineHamburgerIcon: View {
-    var body: some View {
-        VStack(alignment: .leading, spacing: 5) {
-            RoundedRectangle(cornerRadius: 1)
-                .frame(width: 20, height: 2)
-
-            RoundedRectangle(cornerRadius: 1)
-                .frame(width: 10, height: 2)
-        }
-        .frame(width: 20, height: 14, alignment: .leading)
     }
 }
 

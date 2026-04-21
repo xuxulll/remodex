@@ -26,7 +26,8 @@ struct SidebarHeaderView: View {
                 // Mirrors the top-bar menu affordance so full-width sidebar presentations still
                 // have an obvious close target after the content shifts completely offscreen.
                 Button(action: onClose) {
-                    TwoLineHamburgerIcon()
+                    Image(systemName: "sidebar.leading")
+                        .font(.system(size: 16, weight: .semibold))
                         .foregroundStyle(.primary)
                         .frame(width: 44, height: 44)
                         .adaptiveGlass(.regular, in: Circle())
