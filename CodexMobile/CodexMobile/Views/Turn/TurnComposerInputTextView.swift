@@ -5,8 +5,13 @@
 // Depends on: SwiftUI, UIKit, TurnComposerRuntimeMenuBuilder
 
 import SwiftUI
+#if os(iOS)
+#if os(iOS)
 import UIKit
+#endif
+#endif
 
+#if os(iOS)
 struct TurnComposerInputTextView: UIViewRepresentable {
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     @Binding var text: String
@@ -280,9 +285,28 @@ struct TurnComposerInputTextView: UIViewRepresentable {
         }
     }
 }
+#else
+struct TurnComposerInputTextView: View {
+    @Binding var text: String
+    @Binding var isFocused: Bool
+    let isEditable: Bool
+    @Binding var dynamicHeight: CGFloat
+    let runtimeState: TurnComposerRuntimeState?
+    let runtimeActions: TurnComposerRuntimeActions
+    let onPasteImageData: ([Data]) -> Void
+
+    var body: some View {
+        TextEditor(text: $text)
+            .font(AppFont.body())
+            .disabled(!isEditable)
+            .frame(minHeight: dynamicHeight)
+    }
+}
+#endif
 
 // Internal (not fileprivate) because UIViewRepresentable protocol methods expose the type.
 // Only used by TurnComposerInputTextView in this file.
+#if os(iOS)
 final class TurnComposerPasteInterceptingTextView: UITextView {
     var onPasteImageData: (([Data]) -> Void)?
     var runtimeState: TurnComposerRuntimeState?
@@ -412,3 +436,4 @@ final class TurnComposerPasteInterceptingTextView: UITextView {
         return image.jpegData(compressionQuality: intakeCompressionQuality)
     }
 }
+#endif

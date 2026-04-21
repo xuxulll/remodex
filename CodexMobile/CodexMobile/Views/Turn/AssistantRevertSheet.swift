@@ -74,7 +74,6 @@ struct AssistantRevertSheet: View {
                 .padding(16)
             }
             .navigationTitle("Undo this response")
-            .navigationBarTitleDisplayMode(.inline)
             .adaptiveNavigationBar()
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {

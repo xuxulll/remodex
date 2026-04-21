@@ -109,7 +109,6 @@ struct HomeEmptyStateView<AuthSection: View, Footer: View>: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .navigationTitle("Remodex")
-        .navigationBarTitleDisplayMode(.inline)
         .onAppear {
             if connectionPhase == .connecting {
                 connectionAttemptStartedAt = Date()

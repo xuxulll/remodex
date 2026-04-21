@@ -55,7 +55,9 @@ struct OnboardingView: View {
                     )
                     .tag(4)
                 }
+                #if os(iOS)
                 .tabViewStyle(.page(indexDisplayMode: .never))
+                #endif
 
                 bottomBar
             }

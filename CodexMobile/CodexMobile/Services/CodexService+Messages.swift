@@ -5,7 +5,6 @@
 // Depends on: CodexMessage, JSONValue
 
 import Foundation
-import UIKit
 
 private enum TurnTimelineProjectionPolicy {
     // Long chats can contain thousands of persisted rows. Keep initial/open-chat projection

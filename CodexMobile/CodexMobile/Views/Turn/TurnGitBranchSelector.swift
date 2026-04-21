@@ -369,8 +369,10 @@ struct TurnGitBranchPickerSheet: View {
         }
         .buttonStyle(.plain)
         .foregroundStyle(.primary)
+        #if os(iOS)
         .listStyle(.insetGrouped)
         .listSectionSpacing(.compact)
+        #endif
         .environment(\.defaultMinListRowHeight, 28)
         .searchable(text: $searchText, prompt: "Search branches")
         .alert("New branch", isPresented: $isShowingCreateBranchPrompt) {

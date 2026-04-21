@@ -6,11 +6,15 @@
 
 import SwiftUI
 
-@main
 struct RemodexMenuBarApp: App {
     @StateObject private var store = BridgeMenuBarStore()
 
     var body: some Scene {
+        WindowGroup("Remodex") {
+            BridgeDesktopClientView(store: store)
+                .frame(minWidth: 520, minHeight: 560)
+        }
+
         MenuBarExtra {
             BridgeMenuBarContentView(store: store)
         } label: {
@@ -21,5 +25,29 @@ struct RemodexMenuBarApp: App {
             )
         }
         .menuBarExtraStyle(.window)
+    }
+}
+
+private struct BridgeDesktopClientView: View {
+    @ObservedObject var store: BridgeMenuBarStore
+
+    var body: some View {
+        NavigationStack {
+            BridgeMenuBarContentView(store: store)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .navigationTitle("Remodex")
+                .toolbar {
+                    ToolbarItem(placement: .automatic) {
+                        Button {
+                            Task {
+                                await store.refresh(showSpinner: true)
+                            }
+                        } label: {
+                            Label("Refresh", systemImage: "arrow.clockwise")
+                        }
+                        .disabled(store.isRefreshing || store.isPerformingAction)
+                    }
+                }
+        }
     }
 }

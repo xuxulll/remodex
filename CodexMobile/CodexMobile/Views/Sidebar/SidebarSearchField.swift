@@ -22,7 +22,9 @@ struct SidebarSearchField: View {
 
                 TextField("Search conversations", text: $text)
                     .font(AppFont.subheadline())
+                    #if os(iOS)
                     .textInputAutocapitalization(.never)
+                    #endif
                     .autocorrectionDisabled()
                     .focused($isFocused)
 

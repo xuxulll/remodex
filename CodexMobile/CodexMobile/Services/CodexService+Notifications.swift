@@ -5,8 +5,12 @@
 // Depends on: UserNotifications, UIKit, CodexService+Messages
 
 import Foundation
-import UIKit
 import UserNotifications
+#if os(iOS)
+#if os(iOS)
+import UIKit
+#endif
+#endif
 
 private enum CodexNotificationSource {
     static let runCompletion = "codex.runCompletion"
@@ -20,10 +24,12 @@ protocol CodexRemoteNotificationRegistering: AnyObject {
 final class CodexApplicationRemoteNotificationRegistrar: CodexRemoteNotificationRegistering {
     // Requests the APNs device token once alert permission is no longer denied.
     func registerForRemoteNotifications() {
-#if targetEnvironment(simulator)
+#if os(iOS) && targetEnvironment(simulator)
         return
-#else
+#elseif os(iOS)
         UIApplication.shared.registerForRemoteNotifications()
+#else
+        return
 #endif
     }
 }

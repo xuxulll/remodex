@@ -7,6 +7,9 @@
 import SwiftUI
 import Observation
 import PhotosUI
+#if os(macOS)
+import AppKit
+#endif
 
 struct TurnComposerSendAvailability {
     let isSending: Bool
@@ -828,10 +831,15 @@ final class TurnViewModel {
             codex.lastErrorMessage = "You can attach up to \(maxComposerImages) images per message."
             return
         }
+        #if os(iOS)
         guard UIImagePickerController.isSourceTypeAvailable(.camera) else {
             codex.lastErrorMessage = "Camera is not available on this device."
             return
         }
+        #else
+        codex.lastErrorMessage = "Camera capture is only available on iOS."
+        return
+        #endif
         isCameraPresented = true
     }
 
@@ -2158,7 +2166,13 @@ final class TurnViewModel {
                     }
                     let prURL = buildPRURL(ownerRepo: ownerRepo, branch: branch, base: base)
                     if let url = URL(string: prURL) {
+                        #if os(iOS)
                         await UIApplication.shared.open(url)
+                        #else
+                        await MainActor.run {
+                            NSWorkspace.shared.open(url)
+                        }
+                        #endif
                     }
 
                 case .discardRuntimeChangesAndSync:

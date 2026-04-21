@@ -14,9 +14,9 @@
             buildForAnalyzing = "YES">
             <BuildableReference
                BuildableIdentifier = "primary"
-               BlueprintIdentifier = "4FFD549D910217B7A40E28FF"
-               BuildableName = "RemodexMenuBar.app"
-               BlueprintName = "RemodexMenuBar"
+               BlueprintIdentifier = "D9A1C7B82E4F9A1034B56D24"
+               BuildableName = "RemodexMac.app"
+               BlueprintName = "RemodexMac"
                ReferencedContainer = "container:CodexMobile.xcodeproj">
             </BuildableReference>
          </BuildActionEntry>
@@ -30,9 +30,9 @@
       <MacroExpansion>
          <BuildableReference
             BuildableIdentifier = "primary"
-            BlueprintIdentifier = "4FFD549D910217B7A40E28FF"
-            BuildableName = "RemodexMenuBar.app"
-            BlueprintName = "RemodexMenuBar"
+            BlueprintIdentifier = "D9A1C7B82E4F9A1034B56D24"
+            BuildableName = "RemodexMac.app"
+            BlueprintName = "RemodexMac"
             ReferencedContainer = "container:CodexMobile.xcodeproj">
          </BuildableReference>
       </MacroExpansion>
@@ -53,9 +53,9 @@
          runnableDebuggingMode = "0">
          <BuildableReference
             BuildableIdentifier = "primary"
-            BlueprintIdentifier = "4FFD549D910217B7A40E28FF"
-            BuildableName = "RemodexMenuBar.app"
-            BlueprintName = "RemodexMenuBar"
+            BlueprintIdentifier = "D9A1C7B82E4F9A1034B56D24"
+            BuildableName = "RemodexMac.app"
+            BlueprintName = "RemodexMac"
             ReferencedContainer = "container:CodexMobile.xcodeproj">
          </BuildableReference>
       </BuildableProductRunnable>
@@ -70,9 +70,9 @@
          runnableDebuggingMode = "0">
          <BuildableReference
             BuildableIdentifier = "primary"
-            BlueprintIdentifier = "4FFD549D910217B7A40E28FF"
-            BuildableName = "RemodexMenuBar.app"
-            BlueprintName = "RemodexMenuBar"
+            BlueprintIdentifier = "D9A1C7B82E4F9A1034B56D24"
+            BuildableName = "RemodexMac.app"
+            BlueprintName = "RemodexMac"
             ReferencedContainer = "container:CodexMobile.xcodeproj">
          </BuildableReference>
       </BuildableProductRunnable>

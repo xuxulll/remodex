@@ -5,9 +5,9 @@
 // Depends on: SwiftUI, UIKit, TurnGitBranchSelector, ContextWindowProgressRing, CodexWorktreeIcon
 
 import SwiftUI
-import UIKit
 
 struct TurnComposerSecondaryBar: View {
+    @Environment(\.openURL) private var openURL
     let isInputFocused: Bool
     let isEmptyThread: Bool
     let isWorktreeProject: Bool
@@ -40,7 +40,7 @@ struct TurnComposerSecondaryBar: View {
     let canHandOffToWorktree: Bool
     let onTapCreateWorktree: () -> Void
 
-    private let branchLabelColor = Color(.secondaryLabel)
+    private let branchLabelColor = Color.secondary
     private var branchTextFont: Font { AppFont.subheadline() }
     private var branchChevronFont: Font { AppFont.system(size: 9, weight: .regular) }
     private var runtimeLabelTitle: String { isWorktreeProject ? "Worktree" : "Local" }
@@ -122,7 +122,7 @@ struct TurnComposerSecondaryBar: View {
                 Button {
                     HapticFeedback.shared.triggerImpactFeedback(style: .light)
                     if let url = URL(string: "https://chatgpt.com/codex") {
-                        UIApplication.shared.open(url)
+                        openURL(url)
                     }
                 } label: {
                     Label("Cloud", systemImage: "cloud")

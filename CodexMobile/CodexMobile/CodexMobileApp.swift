@@ -7,40 +7,59 @@ import SwiftUI
 
 @MainActor
 @main
-struct CodexMobileApp: App {
+struct RemodexApp: App {
     @Environment(\.scenePhase) private var scenePhase
+    #if os(iOS)
     @UIApplicationDelegateAdaptor(CodexMobileAppDelegate.self) private var appDelegate
-    @State private var codexService: CodexService
+    #endif
+    @State private var interactionService: RemodexInteractionService
+    #if os(macOS)
+    @StateObject private var bridgeMenuStore = BridgeMenuBarStore()
+    #endif
 
     init() {
-        let service = CodexService()
-        service.configureNotifications()
-        _codexService = State(initialValue: service)
+        _interactionService = State(
+            initialValue: RemodexInteractionService(codexService: CodexService())
+        )
     }
 
     var body: some Scene {
         WindowGroup {
             ContentView()
-                .environment(codexService)
+                .environment(interactionService.codexService)
                 .onOpenURL { url in
                     Task { @MainActor in
                         guard CodexService.legacyGPTLoginCallbackEnabled else {
                             return
                         }
-                        await codexService.handleGPTLoginCallbackURL(url)
+                        await interactionService.codexService.handleGPTLoginCallbackURL(url)
                     }
                 }
+                #if os(iOS)
                 .onReceive(
                     NotificationCenter.default.publisher(
                         for: UIApplication.didReceiveMemoryWarningNotification
                     )
                 ) { _ in
-                    TurnCacheManager.resetAll()
+                    interactionService.handleMemoryWarning()
                 }
+                #endif
                 .onChange(of: scenePhase) { _, newPhase in
-                    guard newPhase == .background else { return }
-                    TurnCacheManager.resetAll()
+                    interactionService.handleScenePhaseChange(newPhase)
                 }
         }
+
+        #if os(macOS)
+        MenuBarExtra {
+            BridgeMenuBarContentView(store: bridgeMenuStore)
+        } label: {
+            BridgeMenuBarLabel(
+                snapshot: bridgeMenuStore.snapshot,
+                updateState: bridgeMenuStore.updateState,
+                isBusy: bridgeMenuStore.isRefreshing || bridgeMenuStore.isPerformingAction
+            )
+        }
+        .menuBarExtraStyle(.window)
+        #endif
     }
 }

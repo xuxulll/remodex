@@ -1,10 +1,39 @@
 // FILE: BridgeControlModels.swift
-// Purpose: Defines the machine-readable bridge snapshot plus the menu-bar-specific CLI/update state models.
+// Purpose: Shared bridge-core contracts and snapshot models used by the macOS bridge runtime + menu bar UI.
 // Layer: Companion app model
-// Exports: bridge snapshot, runtime status, pairing payload, CLI availability, and update state helpers
+// Exports: bridge core protocols, runtime snapshots, pairing models, and menu-bar UI state helpers
 // Depends on: Foundation
 
 import Foundation
+
+protocol BridgeRuntimeControlling {
+    func start() async throws
+    func stop() async throws
+    func status() async throws -> BridgeSnapshot
+    func resetPairing() async throws
+    func resumeThread() async throws
+}
+
+protocol SecureTransporting {
+    func beginHandshake() async throws -> BridgeHandshakeState
+    func encryptEnvelope(_ payload: String) throws -> BridgeSecureEnvelope
+    func decryptEnvelope(_ envelope: BridgeSecureEnvelope) throws -> String
+    func applyResumeState(_ state: BridgeResumeState)
+}
+
+protocol CodexHosting {
+    func launch() async throws -> BridgeRuntimeProcessState
+    func shutdown() async
+    func sendRPC(_ payload: String) async throws -> String
+    func streamEvents(_ onEvent: @escaping @Sendable (String) -> Void) async
+}
+
+protocol BridgeStatePersisting {
+    func readSnapshot() throws -> BridgeSnapshot
+    func writeSnapshot(_ snapshot: BridgeSnapshot) throws
+    func readTrustedState() throws -> BridgeTrustedState
+    func writeTrustedState(_ trustedState: BridgeTrustedState) throws
+}
 
 struct BridgeSnapshot: Codable, Equatable {
     let currentVersion: String
@@ -49,6 +78,36 @@ struct BridgePairingPayload: Codable, Equatable {
     let expiresAt: Int64
 }
 
+struct BridgeTrustedState: Codable, Equatable {
+    let macDeviceId: String
+    let macIdentityPublicKey: String
+    let relaySessionId: String
+    let keyEpoch: Int
+    let trustedPhoneDeviceID: String?
+    let lastUpdatedAtISO8601: String
+}
+
+struct BridgeHandshakeState: Codable, Equatable {
+    let keyEpoch: Int
+    let sessionId: String
+    let startedAt: Date
+}
+
+struct BridgeSecureEnvelope: Codable, Equatable {
+    let nonce: String
+    let ciphertext: String
+    let tag: String
+}
+
+struct BridgeResumeState: Codable, Equatable {
+    let lastAppliedOutboundSequence: Int
+}
+
+struct BridgeRuntimeProcessState: Codable, Equatable {
+    let processIdentifier: Int
+    let startedAt: Date
+}
+
 struct BridgePackageUpdateState: Equatable {
     let installedVersion: String?
     let latestVersion: String?
@@ -76,7 +135,7 @@ enum BridgeCLIAvailability: Equatable {
     case missing
     case broken(message: String)
 
-    static let installCommand = "npm install -g remodex@latest"
+    static let installCommand = "Install/enable Codex CLI in Settings"
 
     var isAvailable: Bool {
         if case .available = self {
@@ -91,11 +150,11 @@ enum BridgeCLIAvailability: Equatable {
         case .checking:
             return "Checking"
         case .available:
-            return "CLI Ready"
+            return "Runtime Ready"
         case .missing:
-            return "CLI Missing"
+            return "Runtime Missing"
         case .broken:
-            return "CLI Error"
+            return "Runtime Error"
         }
     }
 
@@ -110,32 +169,31 @@ enum BridgeCLIAvailability: Equatable {
     var setupTitle: String {
         switch self {
         case .checking:
-            return "Checking Global CLI"
+            return "Checking Codex Runtime"
         case .available:
-            return "CLI Ready"
+            return "Runtime Ready"
         case .missing:
-            return "Global CLI Required"
+            return "Codex Runtime Required"
         case .broken:
-            return "CLI Needs Attention"
+            return "Runtime Needs Attention"
         }
     }
 
     var setupMessage: String {
         switch self {
         case .checking:
-            return "Looking for a globally installed `remodex` command before enabling the companion controls."
+            return "Looking for a usable Codex CLI/runtime before enabling the native bridge runtime."
         case .available(let version):
-            return "Detected the global `remodex` CLI (`\(version)`)."
+            return "Detected Codex runtime (\(version))."
         case .missing:
-            return "This companion only works when the global `remodex` CLI is installed and visible to the app shell environment."
+            return "Install Codex CLI on this Mac. The native bridge needs it to host app-server requests."
         case .broken(let message):
-            return "Found `remodex`, but the CLI could not be used. \(message)"
+            return "Found Codex CLI, but runtime validation failed. \(message)"
         }
     }
 }
 
 extension BridgeSnapshot {
-    // Picks the most relevant relay for display, preferring persisted daemon config over the transient QR payload.
     var effectiveRelayURL: String {
         daemonConfig?.relayUrl?.nonEmptyTrimmed
         ?? pairingSession?.pairingPayload?.relay.nonEmptyTrimmed
@@ -159,7 +217,7 @@ extension BridgeSnapshot {
             return Self.relativeFormatter.localizedString(for: updatedAt, relativeTo: Date())
         }
 
-        return launchdLoaded ? "Service loaded" : "Service not loaded"
+        return launchdLoaded ? "Bridge active" : "Bridge inactive"
     }
 
     var lastErrorMessage: String {

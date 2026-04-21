@@ -37,7 +37,6 @@ struct AboutRemodexView: View {
             }
             .font(AppFont.body())
             .navigationTitle("About Remodex")
-            .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Done") { dismiss() }

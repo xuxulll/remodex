@@ -16,7 +16,7 @@ enum BridgeMenuBarActionError: LocalizedError {
     var errorDescription: String? {
         switch self {
         case .missingCLI:
-            return "Install the global `remodex` CLI before using this companion."
+            return "Install the Codex runtime before using the macOS bridge."
         case .brokenCLI(let message):
             return message
         case .pairingTimeout:

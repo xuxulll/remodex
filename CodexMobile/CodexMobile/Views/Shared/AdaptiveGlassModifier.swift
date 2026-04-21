@@ -6,7 +6,7 @@ enum GlassPreference {
     static let storageKey = "codex.useLiquidGlass"
 
     static var isSupported: Bool {
-        if #available(iOS 26, *) { return true }
+        if #available(iOS 26, macOS 26, *) { return true }
         return false
     }
 }
@@ -19,7 +19,7 @@ private struct AdaptiveGlassModifier<S: Shape>: ViewModifier {
     let shape: S
 
     func body(content: Content) -> some View {
-        if #available(iOS 26, *), glassEnabled {
+        if #available(iOS 26, macOS 26, *), glassEnabled {
             if regularStyle {
                 content.glassEffect(.regular, in: shape)
             } else {
@@ -37,7 +37,7 @@ private struct AdaptiveNavigationBarModifier: ViewModifier {
     @AppStorage(GlassPreference.storageKey) private var glassEnabled = true
 
     func body(content: Content) -> some View {
-        if #available(iOS 26, *), glassEnabled {
+        if #available(iOS 26, macOS 26, *), glassEnabled {
             content
         } else {
             content
@@ -52,7 +52,7 @@ private struct AdaptiveToolbarItemModifier<S: Shape>: ViewModifier {
     let shape: S
 
     func body(content: Content) -> some View {
-        if #available(iOS 26, *), glassEnabled {
+        if #available(iOS 26, macOS 26, *), glassEnabled {
             content
         } else {
             content

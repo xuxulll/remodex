@@ -18,7 +18,7 @@ struct ComposerAttachmentTile: View {
                     if let image = TurnAttachmentPipeline.thumbnailImage(
                         fromBase64: imageAttachment.thumbnailBase64JPEG
                     ) {
-                        Image(uiImage: image)
+                        attachmentImage(from: image)
                             .resizable()
                             .scaledToFill()
                     } else {
@@ -65,7 +65,7 @@ struct ComposerAttachmentTile: View {
 
     private var placeholderTile: some View {
         RoundedRectangle(cornerRadius: TurnAttachmentPipeline.thumbnailCornerRadius, style: .continuous)
-            .fill(Color(.secondarySystemFill))
+            .fill(.secondary.opacity(0.15))
             .overlay(
                 Image(systemName: "photo")
                     .foregroundStyle(.secondary)
@@ -77,7 +77,15 @@ struct ComposerAttachmentTile: View {
         case .failed:
             return .red
         default:
-            return Color(.separator)
+            return .secondary.opacity(0.35)
         }
+    }
+
+    private func attachmentImage(from image: TurnPlatformImage) -> Image {
+        #if os(iOS)
+        return Image(uiImage: image)
+        #elseif os(macOS)
+        return Image(nsImage: image)
+        #endif
     }
 }

@@ -150,12 +150,16 @@ final class ContentViewModel {
         guard !hasAttemptedInitialAutoConnect else {
             return
         }
-        hasAttemptedInitialAutoConnect = true
 
         guard !codex.isConnected, !codex.isConnecting else {
             return
         }
 
+        guard codex.hasReconnectCandidate else {
+            return
+        }
+
+        hasAttemptedInitialAutoConnect = true
         do {
             try await connectWithAutoRecovery(
                 codex: codex,
@@ -289,7 +293,13 @@ extension ContentViewModel {
         try await codex.connect(
             serverURL: serverURL,
             token: "",
-            role: "iphone"
+            role: {
+                #if os(macOS)
+                return "desktop"
+                #else
+                return "iphone"
+                #endif
+            }()
         )
     }
 
@@ -391,6 +401,10 @@ extension ContentViewModel {
 
     // Chooses the best reconnect path: resolve the live trusted-Mac session first, then fall back to the saved QR session.
     func preferredReconnectURL(codex: CodexService) async -> String? {
+        if let localBridgeURL = codex.normalizedLocalBridgeServerURL {
+            return localBridgeURL
+        }
+
         switch await trustedReconnectResolution(codex: codex) {
         case .use(let resolvedURL):
             return resolvedURL

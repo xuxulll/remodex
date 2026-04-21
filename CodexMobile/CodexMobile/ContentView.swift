@@ -5,7 +5,11 @@
 // Depends on: SidebarView, TurnView, SettingsView, CodexService, ContentViewModel
 
 import SwiftUI
+#if os(iOS)
 import UIKit
+#elseif os(macOS)
+import AppKit
+#endif
 
 private enum RootSheetRoute: Identifiable, Equatable {
     case bridgeUpdate(CodexBridgeUpdatePrompt)
@@ -78,7 +82,13 @@ struct ContentView: View {
         rootContent
             // Only resume saved-pairing recovery after onboarding is done and the manual scanner is not in control.
             .task {
-                guard hasSeenOnboarding, !isShowingManualScanner else {
+                #if os(macOS)
+                if !hasSeenOnboarding {
+                    hasSeenOnboarding = true
+                }
+                #endif
+
+                guard onboardingSatisfiedForCurrentPlatform, !isShowingManualScanner else {
                     debugSidebarLog("launch task skipped onboardingSeen=\(hasSeenOnboarding) manualScanner=\(isShowingManualScanner)")
                     return
                 }
@@ -147,7 +157,7 @@ struct ContentView: View {
                 codex.setForegroundState(phase != .background)
                 if phase == .active {
                     Task {
-                        guard hasSeenOnboarding, !isShowingManualScanner else { return }
+                        guard onboardingSatisfiedForCurrentPlatform, !isShowingManualScanner else { return }
                         await attemptSavedMacReconnectRecoveryIfNeeded()
                         scheduleSidebarPrewarmIfNeeded()
                     }
@@ -176,6 +186,9 @@ struct ContentView: View {
             }
             .onChange(of: codex.normalizedRelaySessionId) { _, _ in
                 resetSavedMacWakeRecoveryState()
+                Task {
+                    await viewModel.attemptAutoConnectOnLaunchIfNeeded(codex: codex)
+                }
             }
             .onChange(of: codex.threadCompletionBanner) { _, banner in
                 scheduleThreadCompletionBannerDismiss(for: banner)
@@ -221,7 +234,9 @@ struct ContentView: View {
             }
             .alert("Enter Pairing Code", isPresented: $isShowingManualPairingEntry) {
                 TextField("AB23CD34EF", text: $manualPairingCode)
+                    #if os(iOS)
                     .textInputAutocapitalization(.characters)
+                    #endif
                     .autocorrectionDisabled()
 
                 Button(isResolvingManualPairingCode ? "Connecting..." : "Enter") {
@@ -259,7 +274,7 @@ struct ContentView: View {
 
     @ViewBuilder
     private var rootContent: some View {
-        if !hasSeenOnboarding {
+        if onboardingRequiredForCurrentPlatform {
             OnboardingView {
                 finishOnboardingAndShowScanner()
             }
@@ -395,7 +410,7 @@ struct ContentView: View {
                 })
                 .environment(\.wakeMacDisplayAction, wakeMacDisplayRecoveryAction)
                 .toolbar {
-                    ToolbarItem(placement: .topBarLeading) {
+                    ToolbarItem(placement: .automatic) {
                         hamburgerButton
                     }
                 }
@@ -405,9 +420,9 @@ struct ContentView: View {
                 statusMessage: codex.lastErrorMessage,
                 securityLabel: codex.secureConnectionState.statusLabel,
                 trustedPairPresentation: codex.trustedPairPresentation,
-                offlinePrimaryButtonTitle: codex.hasReconnectCandidate ? "Reconnect" : "Scan QR Code",
+                offlinePrimaryButtonTitle: offlinePrimaryButtonTitle,
                 onPrimaryAction: {
-                    if homeConnectionPhase == .offline && !codex.hasReconnectCandidate {
+                    if shouldPresentScannerFromOfflinePrimaryAction {
                         presentAutomaticScanner()
                         return
                     }
@@ -438,7 +453,7 @@ struct ContentView: View {
                 }
             }
             .toolbar {
-                ToolbarItem(placement: .topBarLeading) {
+                ToolbarItem(placement: .automatic) {
                     hamburgerButton
                 }
             }
@@ -520,7 +535,7 @@ struct ContentView: View {
     // Keeps foreground reconnect and the one-shot wake fallback in the same guarded path.
     private func attemptSavedMacReconnectRecoveryIfNeeded() async {
         guard scenePhase == .active,
-              hasSeenOnboarding,
+              onboardingSatisfiedForCurrentPlatform,
               !isShowingManualScanner,
               !isShowingManualPairingEntry else {
             return
@@ -573,7 +588,11 @@ struct ContentView: View {
     }
 
     private var fallbackSidebarWidth: CGFloat {
-        effectiveSidebarWidth(for: UIScreen.main.bounds.width)
+        #if os(iOS)
+        return effectiveSidebarWidth(for: UIScreen.main.bounds.width)
+        #else
+        return effectiveSidebarWidth(for: NSScreen.main?.frame.width ?? 1024)
+        #endif
     }
 
     private func sidebarRevealWidth(for targetWidth: CGFloat) -> CGFloat {
@@ -704,6 +723,9 @@ struct ContentView: View {
 
     // Keeps first-run installs in the scanner by default, while still letting users back out later.
     private var shouldShowQRScanner: Bool {
+        #if os(macOS)
+        return false
+        #else
         guard !codex.isConnected else {
             return false
         }
@@ -717,6 +739,7 @@ struct ContentView: View {
         }
 
         return !codex.hasReconnectCandidate && !hasDismissedAutomaticScanner
+        #endif
     }
 
     // Shows the remembered pairing shell while a saved pairing can still be retried.
@@ -789,7 +812,7 @@ struct ContentView: View {
     // doesn't pay the full mount/grouping cost in the animation frame budget.
     private func scheduleSidebarPrewarmIfNeeded() {
         guard scenePhase == .active,
-              hasSeenOnboarding,
+              onboardingSatisfiedForCurrentPlatform,
               !isShowingManualScanner,
               !isSidebarPrewarmed,
               sidebarPrewarmTask == nil,
@@ -809,7 +832,7 @@ struct ContentView: View {
             try? await Task.sleep(nanoseconds: sidebarPrewarmDelayNanoseconds)
             guard !Task.isCancelled,
                   scenePhase == .active,
-                  hasSeenOnboarding,
+                  onboardingSatisfiedForCurrentPlatform,
                   !isShowingManualScanner,
                   !isSidebarOpen,
                   sidebarDragOffset == 0,
@@ -830,6 +853,37 @@ struct ContentView: View {
             isSidebarPrewarmed = false
             debugSidebarLog("prewarm cleared")
         }
+    }
+
+    private var onboardingRequiredForCurrentPlatform: Bool {
+        #if os(macOS)
+        return false
+        #else
+        return !hasSeenOnboarding
+        #endif
+    }
+
+    private var onboardingSatisfiedForCurrentPlatform: Bool {
+        !onboardingRequiredForCurrentPlatform
+    }
+
+    private var offlinePrimaryButtonTitle: String {
+        if codex.hasReconnectCandidate {
+            return "Reconnect"
+        }
+        #if os(macOS)
+        return "Connect"
+        #else
+        return "Scan QR Code"
+        #endif
+    }
+
+    private var shouldPresentScannerFromOfflinePrimaryAction: Bool {
+        #if os(macOS)
+        return false
+        #else
+        return homeConnectionPhase == .offline && !codex.hasReconnectCandidate
+        #endif
     }
 
     private func beginSidebarGestureDebugIfNeeded(kind: String, startX: CGFloat) {
@@ -865,7 +919,9 @@ struct ContentView: View {
 
     // Uses the responder chain instead of per-view bindings so mixed SwiftUI/UIKit inputs all close together.
     private func dismissActiveKeyboard() {
+        #if os(iOS)
         UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
+        #endif
     }
 
     // Keeps SwiftUI's sheet binding in sync with the route we last chose to present.
@@ -1207,7 +1263,12 @@ struct ContentView: View {
         }
 
         manualPairingErrorMessage = nil
+        #if os(iOS)
         let clipboardString = UIPasteboard.general.string?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        #else
+        let clipboardString = NSPasteboard.general.string(forType: .string)?
+            .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        #endif
         if !clipboardString.isEmpty {
             manualPairingCode = clipboardString
         }

@@ -75,7 +75,7 @@ If you scan the pairing QR with a generic camera or QR reader before installing 
 This repo contains the local bridge, the iOS app target, and their tests:
 
 ```
-├── phodex-bridge/                # Node.js bridge package used by `remodex`
+├── phodex-bridge/                # Legacy Node.js bridge package (kept for migration/reference)
 │   ├── bin/                      # CLI entrypoints
 │   └── src/                      # Bridge runtime, git/workspace handlers, refresh helpers
 ├── CodexMobile/                  # Xcode project root

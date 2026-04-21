@@ -571,7 +571,6 @@ private struct SidebarNewChatProjectPickerSheet: View {
                 }
             }
             .navigationTitle("Start new chat")
-            .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Close") {

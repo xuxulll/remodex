@@ -38,11 +38,12 @@ struct ArchivedChatsView: View {
                         archivedRow(thread)
                     }
                 }
+                #if os(iOS)
                 .listStyle(.insetGrouped)
+                #endif
             }
         }
         .navigationTitle("Archived Chats")
-        .navigationBarTitleDisplayMode(.inline)
         .confirmationDialog(
             "Delete \"\(threadPendingDeletion?.displayTitle ?? "conversation")\"?",
             isPresented: Binding(

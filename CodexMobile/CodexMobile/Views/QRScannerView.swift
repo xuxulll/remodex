@@ -1,3 +1,4 @@
+#if os(iOS)
 // FILE: QRScannerView.swift
 // Purpose: AVFoundation pairing screen dedicated to camera-based QR scans.
 // Layer: View
@@ -6,7 +7,9 @@
 
 import AVFoundation
 import SwiftUI
+#if os(iOS)
 import UIKit
+#endif
 
 struct QRScannerView: View {
     let onBack: (() -> Void)?
@@ -487,3 +490,35 @@ private class QRCameraUIView: UIView, AVCaptureMetadataOutputObjectsDelegate {
         stopCamera()
     }
 }
+#else
+import SwiftUI
+
+struct QRScannerView: View {
+    let onBack: (() -> Void)?
+    let onScan: (CodexPairingQRPayload) -> Void
+
+    init(
+        initialBridgeUpdatePrompt: CodexBridgeUpdatePrompt? = nil,
+        initialHasCameraPermission: Bool = false,
+        initialIsCheckingPermission: Bool = true,
+        onBack: (() -> Void)? = nil,
+        onScan: @escaping (CodexPairingQRPayload) -> Void
+    ) {
+        self.onBack = onBack
+        self.onScan = onScan
+    }
+
+    var body: some View {
+        VStack(spacing: 12) {
+            Text("QR scan is available on iOS")
+                .font(AppFont.body())
+                .foregroundStyle(.secondary)
+            if let onBack {
+                Button("Back", action: onBack)
+            }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(Color.black.opacity(0.9))
+    }
+}
+#endif

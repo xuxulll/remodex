@@ -1,10 +1,13 @@
+#if os(iOS)
 // FILE: SettingsView.swift
 // Purpose: Settings for Local Mode (Codex runs on user's Mac, relay WebSocket).
 // Layer: View
 // Exports: SettingsView
 
 import SwiftUI
+#if os(iOS)
 import UIKit
+#endif
 
 struct SettingsView: View {
     @Environment(CodexService.self) private var codex
@@ -1032,3 +1035,26 @@ private struct SettingsMacNameSheet: View {
             .environment(CodexService())
     }
 }
+#else
+import SwiftUI
+
+struct SettingsView: View {
+    @Environment(CodexService.self) private var codex
+
+    var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 16) {
+                Text("Settings")
+                    .font(AppFont.title3(weight: .semibold))
+                Text("macOS settings controls are being unified with iOS in this refactor.")
+                    .font(AppFont.body())
+                    .foregroundStyle(.secondary)
+                Text("Connected: \(codex.isConnected ? "Yes" : "No")")
+                    .font(AppFont.subheadline())
+            }
+            .padding()
+        }
+        .navigationTitle("Settings")
+    }
+}
+#endif

@@ -4,7 +4,10 @@
 // Exports: TurnComposerRuntimeMenuBuilder
 // Depends on: UIKit, TurnComposerRuntimeState, TurnComposerRuntimeActions, CodexServiceTier
 
+#if os(iOS)
+#if os(iOS)
 import UIKit
+#endif
 
 struct TurnComposerRuntimeMenuBuilder {
     let runtimeState: TurnComposerRuntimeState
@@ -81,3 +84,9 @@ struct TurnComposerRuntimeMenuBuilder {
         )
     }
 }
+#else
+struct TurnComposerRuntimeMenuBuilder {
+    let runtimeState: TurnComposerRuntimeState
+    let runtimeActions: TurnComposerRuntimeActions
+}
+#endif

@@ -108,7 +108,7 @@ struct BridgeMenuBarContentView: View {
         VStack(alignment: .leading, spacing: 10) {
             sectionTitle("Relay Override")
 
-            Text("Optional. Leave empty to use whatever `remodex` resolves from your shell or saved daemon config.")
+            Text("Optional. Leave empty to use the relay from saved bridge config.")
                 .font(.system(size: 11, weight: .regular))
                 .foregroundStyle(.secondary)
 
@@ -280,7 +280,7 @@ struct BridgeMenuBarContentView: View {
     private var cliSetupCard: some View {
         VStack(alignment: .leading, spacing: 10) {
             HStack {
-                sectionTitle("Global CLI")
+            sectionTitle("Codex Runtime")
                 Spacer()
                 HStack(spacing: 5) {
                     Circle()

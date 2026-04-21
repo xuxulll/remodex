@@ -7,8 +7,26 @@
 import Foundation
 import Network
 import Observation
-import UIKit
 import UserNotifications
+#if os(iOS)
+#if os(iOS)
+import UIKit
+#endif
+#endif
+
+enum CodexApplicationState {
+    case active
+    case inactive
+    case background
+}
+
+#if os(iOS)
+typealias CodexBackgroundRunGraceTaskID = UIBackgroundTaskIdentifier
+let codexInvalidBackgroundRunGraceTaskID = UIBackgroundTaskIdentifier.invalid
+#else
+typealias CodexBackgroundRunGraceTaskID = Int
+let codexInvalidBackgroundRunGraceTaskID = -1
+#endif
 
 struct CodexApprovalRequest: Identifiable, Sendable {
     let id: String
@@ -380,6 +398,10 @@ final class CodexService {
     var relayMacIdentityPublicKey: String?
     var relayProtocolVersion: Int = codexSecureProtocolVersion
     var lastAppliedBridgeOutboundSeq = 0
+    // Local macOS-only direct app-server endpoint used when the app hosts its own bridge runtime.
+    var localBridgeServerURL: String?
+    // Allows the desktop client to talk plaintext JSON-RPC directly to a local app-server endpoint.
+    var bypassSecureTransportForCurrentConnection = false
     // Mirrors the bridge package version currently running on the Mac, if the bridge reports it.
     var bridgeInstalledVersion: String?
     // Mirrors the latest published bridge package version, when the bridge can resolve it.
@@ -494,7 +516,7 @@ final class CodexService {
     var mirroredRunningCatchupThreadIDs: Set<String> = []
     var lastMirroredRunningCatchupAtByThread: [String: Date] = [:]
     var localNetworkAuthorizationStatus: LocalNetworkAuthorizationStatus = .unknown
-    var backgroundTurnGraceTaskID: UIBackgroundTaskIdentifier = .invalid
+    var backgroundTurnGraceTaskID: CodexBackgroundRunGraceTaskID = codexInvalidBackgroundRunGraceTaskID
     var hasConfiguredNotifications = false
     var runCompletionNotificationDedupedAt: [String: Date] = [:]
     var structuredUserInputNotificationDedupedAt: [String: Date] = [:]
@@ -504,7 +526,22 @@ final class CodexService {
     var lastPushRegistrationSignature: String?
     var shouldAutoReconnectOnForeground = false
     // Test hook so connection handling can model `.inactive` without waiting for real app lifecycle changes.
-    @ObservationIgnored var applicationStateProvider: () -> UIApplication.State = { UIApplication.shared.applicationState }
+    @ObservationIgnored var applicationStateProvider: () -> CodexApplicationState = {
+        #if os(iOS)
+        switch UIApplication.shared.applicationState {
+        case .active:
+            return .active
+        case .inactive:
+            return .inactive
+        case .background:
+            return .background
+        @unknown default:
+            return .inactive
+        }
+        #else
+        return .active
+        #endif
+    }
     var secureSession: CodexSecureSession?
     var pendingHandshake: CodexPendingHandshake?
     var phoneIdentityState: CodexPhoneIdentityState
@@ -763,6 +800,12 @@ final class CodexService {
             .nilIfEmpty
     }
 
+    var normalizedLocalBridgeServerURL: String? {
+        localBridgeServerURL?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .nilIfEmpty
+    }
+
     var normalizedRelayMacDeviceId: String? {
         relayMacDeviceId?
             .trimmingCharacters(in: .whitespacesAndNewlines)
@@ -807,7 +850,7 @@ final class CodexService {
     }
 
     var hasReconnectCandidate: Bool {
-        hasSavedRelaySession || hasTrustedMacReconnectCandidate
+        normalizedLocalBridgeServerURL != nil || hasSavedRelaySession || hasTrustedMacReconnectCandidate
     }
 
     // Chooses the best relay base URL for display-wake recovery, even when only the trusted Mac record remains.

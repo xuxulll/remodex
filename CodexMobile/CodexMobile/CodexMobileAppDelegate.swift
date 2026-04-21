@@ -5,13 +5,18 @@
 // Depends on: Foundation, UIKit
 
 import Foundation
+#if os(iOS)
+#if os(iOS)
 import UIKit
+#endif
+#endif
 
 extension Notification.Name {
     static let codexDidRegisterForRemoteNotifications = Notification.Name("codex.didRegisterForRemoteNotifications")
     static let codexDidFailToRegisterForRemoteNotifications = Notification.Name("codex.didFailToRegisterForRemoteNotifications")
 }
 
+#if os(iOS)
 final class CodexMobileAppDelegate: NSObject, UIApplicationDelegate {
     // Forwards the APNs token so CodexService can persist and sync it to the paired Mac bridge.
     func application(
@@ -41,3 +46,4 @@ final class CodexMobileAppDelegate: NSObject, UIApplicationDelegate {
         )
     }
 }
+#endif

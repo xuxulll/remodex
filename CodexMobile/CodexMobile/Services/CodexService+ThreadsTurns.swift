@@ -1431,37 +1431,25 @@ extension CodexService {
         // The approved plan is already part of the thread history, so keep the
         // handoff prompt minimal instead of replaying the full plan body.
         let userInput = "Implement plan."
+        // Explicitly exit plan mode before starting implementation so runtimes
+        // that persist plan-mode constraints do not reject execution.
+        resetPlanSessionState(for: normalizedThreadID)
 
-        var expectedTurnID = activeTurnID(for: normalizedThreadID)
-        if expectedTurnID == nil {
+        // Always start a fresh default-mode turn for implementation. Steering an
+        // in-flight plan turn can keep runtime-side plan constraints active.
+        if let activeTurnID = activeTurnID(for: normalizedThreadID) {
             do {
-                expectedTurnID = try await resolveInFlightTurnID(threadId: normalizedThreadID)
+                try await interruptTurn(turnId: activeTurnID, threadId: normalizedThreadID)
             } catch {
-                if let serviceError = error as? CodexServiceError,
-                   case .invalidInput(_) = serviceError {
-                    expectedTurnID = nil
-                } else {
-                    throw error
-                }
+                // Best-effort stop; fallback to a new turn start anyway.
             }
-        }
-
-        if let expectedTurnID {
-            try await steerTurn(
-                userInput: userInput,
-                threadId: normalizedThreadID,
-                expectedTurnId: expectedTurnID,
-                shouldAppendUserMessage: true,
-                collaborationMode: nil
-            )
-            return
         }
 
         try await startTurn(
             userInput: userInput,
             threadId: normalizedThreadID,
             shouldAppendUserMessage: true,
-            collaborationMode: nil
+            collaborationMode: .default
         )
     }
 

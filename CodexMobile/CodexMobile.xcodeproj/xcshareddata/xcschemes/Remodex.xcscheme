@@ -15,8 +15,8 @@
             <BuildableReference
                BuildableIdentifier = "primary"
                BlueprintIdentifier = "C09A76AD2F4B8D7B003B3F3A"
-               BuildableName = "CodexMobile.app"
-               BlueprintName = "CodexMobile"
+               BuildableName = "Remodex.app"
+               BlueprintName = "Remodex"
                ReferencedContainer = "container:CodexMobile.xcodeproj">
             </BuildableReference>
          </BuildActionEntry>
@@ -59,8 +59,8 @@
          <BuildableReference
             BuildableIdentifier = "primary"
             BlueprintIdentifier = "C09A76AD2F4B8D7B003B3F3A"
-            BuildableName = "CodexMobile.app"
-            BlueprintName = "CodexMobile"
+            BuildableName = "Remodex.app"
+            BlueprintName = "Remodex"
             ReferencedContainer = "container:CodexMobile.xcodeproj">
          </BuildableReference>
       </MacroExpansion>
@@ -102,8 +102,8 @@
          <BuildableReference
             BuildableIdentifier = "primary"
             BlueprintIdentifier = "C09A76AD2F4B8D7B003B3F3A"
-            BuildableName = "CodexMobile.app"
-            BlueprintName = "CodexMobile"
+            BuildableName = "Remodex.app"
+            BlueprintName = "Remodex"
             ReferencedContainer = "container:CodexMobile.xcodeproj">
          </BuildableReference>
       </BuildableProductRunnable>
@@ -119,8 +119,8 @@
          <BuildableReference
             BuildableIdentifier = "primary"
             BlueprintIdentifier = "C09A76AD2F4B8D7B003B3F3A"
-            BuildableName = "CodexMobile.app"
-            BlueprintName = "CodexMobile"
+            BuildableName = "Remodex.app"
+            BlueprintName = "Remodex"
             ReferencedContainer = "container:CodexMobile.xcodeproj">
          </BuildableReference>
       </BuildableProductRunnable>

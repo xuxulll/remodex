@@ -72,7 +72,7 @@ struct TurnToolbarContent: ToolbarContent {
         }
 
         if showsThreadActions {
-            ToolbarItem(placement: .topBarTrailing) {
+            ToolbarItem(placement: .automatic) {
                 Menu {
                     // Keeps all "branch from here" actions together behind the compact toolbar affordance.
                     Button {
@@ -115,14 +115,16 @@ struct TurnToolbarContent: ToolbarContent {
             }
         }
 
+        #if os(iOS)
         if showsThreadActions, hasTrailingCluster {
             if #available(iOS 26.0, *) {
-                ToolbarSpacer(.fixed, placement: .topBarTrailing)
+                ToolbarSpacer(.fixed, placement: .automatic)
             }
         }
+        #endif
 
         if repoDiffTotals != nil || showsGitActions {
-            ToolbarItemGroup(placement: .topBarTrailing) {
+            ToolbarItemGroup(placement: .automatic) {
                 if let repoDiffTotals {
                     TurnToolbarDiffTotalsLabel(
                         totals: repoDiffTotals,
@@ -169,37 +171,12 @@ private struct TurnMacHandoffToolbarLabel: View {
 private struct ResizableThreadActionSymbol: View {
     let systemName: String
     let pointSize: CGFloat
-    var weight: UIImage.SymbolWeight = .semibold
+    var weight: Font.Weight = .semibold
 
     var body: some View {
-        Image(uiImage: resizedSymbol(named: systemName, pointSize: pointSize, weight: weight))
-            .renderingMode(.template)
-            .resizable()
-            .scaledToFit()
+        Image(systemName: systemName)
+            .font(.system(size: pointSize, weight: weight))
             .frame(width: pointSize, height: pointSize)
-    }
-
-    private func resizedSymbol(named name: String, pointSize: CGFloat, weight: UIImage.SymbolWeight) -> UIImage {
-        let config = UIImage.SymbolConfiguration(pointSize: pointSize, weight: weight)
-        guard let symbol = UIImage(systemName: name, withConfiguration: config)?
-            .withRenderingMode(.alwaysTemplate) else {
-            return UIImage()
-        }
-
-        let canvasSide = max(symbol.size.width, symbol.size.height)
-        let canvasSize = CGSize(width: canvasSide, height: canvasSide)
-        let renderer = UIGraphicsImageRenderer(size: canvasSize)
-        let scale = min(canvasSize.width / symbol.size.width, canvasSize.height / symbol.size.height)
-        let scaledSize = CGSize(width: symbol.size.width * scale, height: symbol.size.height * scale)
-        let origin = CGPoint(
-            x: (canvasSize.width - scaledSize.width) / 2,
-            y: (canvasSize.height - scaledSize.height) / 2
-        )
-
-        return renderer.image { _ in
-            symbol.draw(in: CGRect(origin: origin, size: scaledSize))
-        }
-        .withRenderingMode(.alwaysTemplate)
     }
 }
 
@@ -316,7 +293,6 @@ struct TurnThreadPathSheet: View {
                 .padding()
             }
             .navigationTitle(context.folderName)
-            .navigationBarTitleDisplayMode(.inline)
             .adaptiveNavigationBar()
         }
         .presentationDetents([.fraction(0.4), .medium])

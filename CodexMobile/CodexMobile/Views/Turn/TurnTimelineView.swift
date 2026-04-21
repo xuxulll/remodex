@@ -425,6 +425,8 @@ struct TurnTimelineView<EmptyState: View, Composer: View>: View {
     /// Heavy-chat staged warmup is temporarily disabled until geometry settles reliably.
     private static var initialWarmTailCount: Int { 0 }
     private static var scrollToLatestButtonLift: CGFloat { 44 + 18 }
+    private static var runningInsetBottomPadding: CGFloat { 52 }
+    private static var idleInsetBottomPadding: CGFloat { 12 }
 
     @State private var visibleTailCount: Int = pageSize
     @State private var viewportHeight: CGFloat = 0
@@ -467,6 +469,12 @@ struct TurnTimelineView<EmptyState: View, Composer: View>: View {
 
     private var shouldShowFullTimelineLoader: Bool {
         shouldWarmRecentTailProgressively && visibleTailCount == 0
+    }
+
+    // Keep the final streaming accessory from riding directly against the footer
+    // when the bridge is actively producing output.
+    private var timelineBottomPadding: CGFloat {
+        isThreadRunning ? Self.runningInsetBottomPadding : Self.idleInsetBottomPadding
     }
 
     // Keeps larger accessibility text inside a slightly roomier gutter so assistant
@@ -536,7 +544,7 @@ struct TurnTimelineView<EmptyState: View, Composer: View>: View {
                     }
                     .padding(.horizontal, timelineHorizontalPadding)
                     .padding(.top, 12)
-                    .padding(.bottom, 12)
+                    .padding(.bottom, timelineBottomPadding)
 
                     // Keep bottom anchor outside the message stack so it is always
                     // reachable by scrollTo regardless of VStack layout timing.
@@ -1282,6 +1290,8 @@ struct TurnTimelineView<EmptyState: View, Composer: View>: View {
     ) {
         let isSuppressingBottomCorrectionsForWarmup = isRecentTailWarmupActive
             && autoScrollMode == .followBottom
+        let wasPinnedToBottom = old.isAtBottom
+            && autoScrollMode != .manual
         let viewportHeightChanged = new.viewportHeight > 0
             && abs(new.viewportHeight - old.viewportHeight) > 2
 
@@ -1291,7 +1301,7 @@ struct TurnTimelineView<EmptyState: View, Composer: View>: View {
             }
             performInitialRecoverySnapIfNeeded(using: proxy)
             if viewportHeightChanged,
-               shouldPinTimelineToBottomDuringGeometryChange,
+               (shouldPinTimelineToBottomDuringGeometryChange || wasPinnedToBottom),
                !isSuppressingBottomCorrectionsForWarmup {
                 scheduleFollowBottomScroll(using: proxy)
             }

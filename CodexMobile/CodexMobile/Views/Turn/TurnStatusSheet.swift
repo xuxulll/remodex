@@ -20,7 +20,7 @@ struct TurnStatusSheet: View {
                 .padding(.bottom, 16)
             }
             .navigationTitle("Status")
-            .navigationBarTitleDisplayMode(.inline)
+            
             .adaptiveNavigationBar()
         }
         .presentationDetents([.fraction(0.4), .medium, .large])

@@ -241,7 +241,6 @@ struct TurnDiffSheet: View {
                 .padding(.horizontal, 8)
             }
             .navigationTitle(title)
-            .navigationBarTitleDisplayMode(.inline)
             .adaptiveNavigationBar()
             .toolbar {
                 ToolbarItem(placement: .confirmationAction) {

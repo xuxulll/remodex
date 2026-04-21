@@ -5,7 +5,13 @@
 // Depends on: SwiftUI, UIKit, CodexBridgeUpdatePrompt
 
 import SwiftUI
+#if os(iOS)
+#if os(iOS)
 import UIKit
+#endif
+#elseif os(macOS)
+import AppKit
+#endif
 
 struct BridgeUpdateSheet: View {
     let prompt: CodexBridgeUpdatePrompt
@@ -42,7 +48,7 @@ struct BridgeUpdateSheet: View {
                                 .frame(maxWidth: .infinity, alignment: .leading)
 
                             Button {
-                                UIPasteboard.general.string = command
+                                copyToClipboard(command)
                                 HapticFeedback.shared.triggerImpactFeedback(style: .light)
                                 withAnimation(.easeInOut(duration: 0.2)) {
                                     didCopyCommand = true
@@ -61,7 +67,7 @@ struct BridgeUpdateSheet: View {
                                 }
                                 .padding(.horizontal, 12)
                                 .padding(.vertical, 10)
-                                .background(Color(.secondarySystemFill), in: Capsule())
+                                .background(.secondary.opacity(0.2), in: Capsule())
                             }
                             .buttonStyle(.plain)
                             .accessibilityLabel("Copy bridge update command")
@@ -69,7 +75,7 @@ struct BridgeUpdateSheet: View {
                         .padding(14)
                         .background(
                             RoundedRectangle(cornerRadius: 18, style: .continuous)
-                                .fill(Color(.tertiarySystemFill).opacity(0.75))
+                                .fill(.secondary.opacity(0.14))
                         )
                     } else {
                         Text("Install the latest Remodex build on this iPhone, then come back here and reconnect.")
@@ -111,7 +117,7 @@ struct BridgeUpdateSheet: View {
                         .padding(.vertical, 14)
                         .background(
                             RoundedRectangle(cornerRadius: 18, style: .continuous)
-                                .fill(Color(.secondarySystemFill))
+                                .fill(.secondary.opacity(0.2))
                         )
                         .buttonStyle(.plain)
 
@@ -122,7 +128,16 @@ struct BridgeUpdateSheet: View {
                 }
             }
             .padding(24)
-            .navigationBarTitleDisplayMode(.inline)
         }
+    }
+
+    private func copyToClipboard(_ text: String) {
+        #if os(iOS)
+        UIPasteboard.general.string = text
+        #elseif os(macOS)
+        let pasteboard = NSPasteboard.general
+        pasteboard.clearContents()
+        pasteboard.setString(text, forType: .string)
+        #endif
     }
 }

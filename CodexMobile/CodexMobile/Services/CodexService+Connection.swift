@@ -6,7 +6,6 @@
 
 import Foundation
 import Network
-import UIKit
 
 extension CodexService {
     // Only close codes that prove the saved pairing/session can no longer be reused
@@ -89,9 +88,16 @@ extension CodexService {
         }
         clearHydrationCaches()
         let isTrustedReconnectAttempt = hasTrustedReconnectContext
+        let bypassSecureTransport = shouldBypassSecureTransport(for: normalizedServerURL)
 
         do {
-            try await performSecureHandshake()
+            bypassSecureTransportForCurrentConnection = bypassSecureTransport
+            if bypassSecureTransport {
+                secureSession = nil
+                secureConnectionState = .encrypted
+            } else {
+                try await performSecureHandshake()
+            }
 
             isConnected = true
             shouldAutoReconnectOnForeground = false
@@ -177,6 +183,7 @@ extension CodexService {
         clearHydrationCaches()
         resumedThreadIDs.removeAll()
         resetSecureTransportState()
+        bypassSecureTransportForCurrentConnection = false
         cancelTrustedSessionResolve()
 
         failAllPendingRequests(with: CodexServiceError.disconnected)
@@ -185,6 +192,17 @@ extension CodexService {
     func setKeepMacAwakeWhileBridgeRunsPreference(_ enabled: Bool) {
         keepMacAwakeWhileBridgeRuns = enabled
         defaults.set(enabled, forKey: Self.keepMacAwakeWhileBridgeRunsDefaultsKey)
+    }
+
+    // Uses plaintext JSON-RPC only for the exact local app-server endpoint hosted by macOS Remodex.
+    func shouldBypassSecureTransport(for serverURL: String) -> Bool {
+        guard let localURL = normalizedLocalBridgeServerURL,
+              let local = URL(string: localURL),
+              let target = URL(string: serverURL) else {
+            return false
+        }
+
+        return canonicalServerIdentity(for: local) == canonicalServerIdentity(for: target)
     }
 
     func updateBridgeKeepMacAwakePreference(_ enabled: Bool) async {
@@ -459,6 +477,7 @@ extension CodexService {
     func performPostConnectSyncPass(preferredThreadId: String? = nil) async {
         try? await listModels()
         try? await listThreads()
+        await recoverAuthoritativeHistoryForVolatileThreads()
         if await routePendingNotificationOpenIfPossible(refreshIfNeeded: false) {
             return
         }

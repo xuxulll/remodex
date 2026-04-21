@@ -4,7 +4,10 @@
 // Exports: CameraImagePicker
 
 import SwiftUI
+#if os(iOS)
+#if os(iOS)
 import UIKit
+#endif
 
 struct CameraImagePicker: UIViewControllerRepresentable {
     let onImageCaptured: (Data) -> Void
@@ -64,3 +67,12 @@ struct CameraImagePicker: UIViewControllerRepresentable {
         }
     }
 }
+#else
+struct CameraImagePicker: View {
+    let onImageCaptured: (Data) -> Void
+
+    var body: some View {
+        EmptyView()
+    }
+}
+#endif

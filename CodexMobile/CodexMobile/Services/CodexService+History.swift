@@ -5,7 +5,11 @@
 // Depends on: CodexMessage, JSONValue
 
 import Foundation
+#if os(iOS)
 import UIKit
+#elseif os(macOS)
+import AppKit
+#endif
 
 private enum RunningThreadHistoryCatchupPolicy {
     // Running-thread reopen only needs the latest transcript tail to catch up the UI.
@@ -1194,6 +1198,7 @@ extension CodexService {
 
     // Produces the persisted 70x70 JPEG thumbnail preview used in message rows.
     func makeThumbnailBase64JPEG(from imageData: Data, side: CGFloat = 70) -> String? {
+        #if os(iOS)
         guard let image = UIImage(data: imageData) else {
             return nil
         }
@@ -1213,6 +1218,38 @@ extension CodexService {
         guard let jpegData = rendered.jpegData(compressionQuality: 0.8) else {
             return nil
         }
+        #elseif os(macOS)
+        guard let image = NSImage(data: imageData) else {
+            return nil
+        }
+
+        let canvasSize = CGSize(width: side, height: side)
+        let sourceSize = image.size
+        guard sourceSize.width > 0, sourceSize.height > 0 else {
+            return nil
+        }
+
+        let scale = max(side / sourceSize.width, side / sourceSize.height)
+        let scaledSize = CGSize(width: sourceSize.width * scale, height: sourceSize.height * scale)
+        let origin = CGPoint(
+            x: (side - scaledSize.width) / 2,
+            y: (side - scaledSize.height) / 2
+        )
+
+        let rendered = NSImage(size: canvasSize)
+        rendered.lockFocus()
+        image.draw(in: CGRect(origin: origin, size: scaledSize))
+        rendered.unlockFocus()
+
+        guard let tiffData = rendered.tiffRepresentation,
+              let bitmap = NSBitmapImageRep(data: tiffData),
+              let jpegData = bitmap.representation(
+                using: .jpeg,
+                properties: [.compressionFactor: 0.8]
+              ) else {
+            return nil
+        }
+        #endif
 
         return jpegData.base64EncodedString()
     }

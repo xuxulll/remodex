@@ -343,9 +343,9 @@ struct PlanExecutionSheet: View {
             }
             .background(Color(.systemBackground))
             .navigationTitle("Active plan")
-            .navigationBarTitleDisplayMode(.inline)
+            
             .toolbar {
-                ToolbarItem(placement: .topBarTrailing) {
+                ToolbarItem(placement: .automatic) {
                     Button("Done") {
                         dismiss()
                     }
@@ -474,9 +474,9 @@ struct StructuredUserInputSheet: View {
             }
             .background(Color(.systemBackground))
             .navigationTitle("Questions")
-            .navigationBarTitleDisplayMode(.inline)
+            
             .toolbar {
-                ToolbarItem(placement: .topBarTrailing) {
+                ToolbarItem(placement: .automatic) {
                     Button("Done") {
                         dismiss()
                     }

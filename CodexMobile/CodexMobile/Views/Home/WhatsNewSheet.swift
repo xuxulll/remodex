@@ -46,7 +46,6 @@ struct WhatsNewSheet: View {
 
                 pinnedDismissButton
             }
-            .navigationBarTitleDisplayMode(.inline)
         }
     }
 

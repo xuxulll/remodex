@@ -374,10 +374,9 @@ private struct SubagentAgentDetailSheet: View {
                 .padding(.horizontal, 20)
                 .padding(.vertical, 18)
             }
-            .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .principal) { titleText }
-                ToolbarItem(placement: .topBarTrailing) {
+                ToolbarItem(placement: .automatic) {
                     Button("Done") { dismiss() }
                 }
             }

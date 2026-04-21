@@ -421,7 +421,6 @@ private struct PlanAccessoryInContextPreview: View {
             }
             .background(Color(.systemGroupedBackground))
             .navigationTitle("Plan Accessory")
-            .navigationBarTitleDisplayMode(.inline)
         }
     }
 

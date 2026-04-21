@@ -5,7 +5,13 @@
 // Depends on: SwiftUI, UIKit
 
 import SwiftUI
+#if os(iOS)
+#if os(iOS)
 import UIKit
+#endif
+#elseif os(macOS)
+import AppKit
+#endif
 
 enum AppFont {
     enum Style: String, CaseIterable, Identifiable {
@@ -112,6 +118,7 @@ enum AppFont {
         }
     }
 
+    #if os(iOS)
     private static func uiKitWeight(for weight: Font.Weight) -> UIFont.Weight {
         switch weight {
         case .ultraLight:
@@ -134,6 +141,7 @@ enum AppFont {
             return .regular
         }
     }
+    #endif
 
     private static func resolvedCustomFaceName(
         for weight: Font.Weight,
@@ -141,7 +149,7 @@ enum AppFont {
         size: CGFloat
     ) -> String? {
         for faceName in candidateFaceNames(for: weight, style: style) {
-            if UIFont(name: faceName, size: size) != nil {
+            if isInstalledFont(named: faceName, size: size) {
                 return faceName
             }
         }
@@ -149,6 +157,7 @@ enum AppFont {
         return nil
     }
 
+    #if os(iOS)
     private static func resolvedUIFont(
         size: CGFloat,
         weight: Font.Weight,
@@ -165,6 +174,7 @@ enum AppFont {
 
         return UIFont.preferredFont(forTextStyle: fallbackTextStyle)
     }
+    #endif
 
     // Keeps code surfaces on the selected mono family when the user picks a mono UI font.
     private static var preferredMonoStyle: Style {
@@ -207,7 +217,7 @@ enum AppFont {
 
     private static func resolvedMonoFaceName(for weight: Font.Weight, size: CGFloat) -> String? {
         for faceName in candidateMonoFaceNames(for: weight, style: preferredMonoStyle) {
-            if UIFont(name: faceName, size: size) != nil {
+            if isInstalledFont(named: faceName, size: size) {
                 return faceName
             }
         }
@@ -215,6 +225,7 @@ enum AppFont {
         return nil
     }
 
+    #if os(iOS)
     private static func resolvedMonoUIFont(
         size: CGFloat,
         weight: Font.Weight,
@@ -235,6 +246,7 @@ enum AppFont {
 
         return UIFont.monospacedSystemFont(ofSize: size, weight: uiKitWeight(for: weight))
     }
+    #endif
 
     private static func monoFont(size: CGFloat, weight: Font.Weight, style: Font.TextStyle) -> Font {
         let adjustedSize = max(size + monoSizeAdjustment(), 1)
@@ -245,9 +257,15 @@ enum AppFont {
         return .system(style, design: .monospaced, weight: weight)
     }
 
-    static func monoUIFont(size: CGFloat, weight: Font.Weight = .regular, textStyle: UIFont.TextStyle = .body) -> UIFont {
+    #if os(iOS)
+    static func monoUIFont(
+        size: CGFloat,
+        weight: Font.Weight = .regular,
+        textStyle: UIFont.TextStyle = .body
+    ) -> UIFont {
         resolvedMonoUIFont(size: size, weight: weight, fallbackTextStyle: textStyle)
     }
+    #endif
 
     // Mirrors the active monospaced family inside HTML renderers such as Mermaid fallback blocks.
     static var webMonospaceFontStack: String {
@@ -278,9 +296,15 @@ enum AppFont {
         return .system(style, design: systemDesign, weight: weight)
     }
 
-    static func uiFont(size: CGFloat, weight: Font.Weight = .regular, textStyle: UIFont.TextStyle = .body) -> UIFont {
+    #if os(iOS)
+    static func uiFont(
+        size: CGFloat,
+        weight: Font.Weight = .regular,
+        textStyle: UIFont.TextStyle = .body
+    ) -> UIFont {
         resolvedUIFont(size: size, weight: weight, fallbackTextStyle: textStyle)
     }
+    #endif
 
     // MARK: - Semantic helpers
 
@@ -355,5 +379,15 @@ enum AppFont {
         }
 
         return .system(size: size, weight: weight)
+    }
+
+    private static func isInstalledFont(named faceName: String, size: CGFloat) -> Bool {
+        #if os(iOS)
+        return UIFont(name: faceName, size: size) != nil
+        #elseif os(macOS)
+        return NSFont(name: faceName, size: size) != nil
+        #else
+        return false
+        #endif
     }
 }

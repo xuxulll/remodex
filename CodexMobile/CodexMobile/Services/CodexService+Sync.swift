@@ -5,7 +5,11 @@
 // Depends on: CodexThread, CodexServiceError
 
 import Foundation
+#if os(iOS)
+#if os(iOS)
 import UIKit
+#endif
+#endif
 
 extension CodexService {
     struct RunningThreadCatchupOutcome: Equatable {
@@ -99,6 +103,9 @@ extension CodexService {
             if isConnected && isInitialized {
                 startSyncLoop()
                 requestImmediateSync(threadId: activeThreadId)
+                Task { @MainActor [weak self] in
+                    await self?.recoverAuthoritativeHistoryForVolatileThreads()
+                }
                 // Re-check bridge-managed state when the app becomes active again.
                 Task { @MainActor [weak self] in
                     await self?.refreshBridgeManagedState(allowAvailableBridgeUpdatePrompt: true)
@@ -132,6 +139,33 @@ extension CodexService {
         }
     }
 
+    // Replays authoritative thread/read snapshots for threads that still contain
+    // unresolved local rows after reconnect/background recovery.
+    func recoverAuthoritativeHistoryForVolatileThreads() async {
+        guard isConnected, isInitialized else {
+            return
+        }
+
+        let candidateThreadIDs = authoritativeHistoryRecoveryThreadIDs()
+        guard !candidateThreadIDs.isEmpty else {
+            return
+        }
+
+        for threadID in candidateThreadIDs {
+            do {
+                _ = try await loadThreadHistoryIfNeeded(
+                    threadId: threadID,
+                    forceRefresh: true,
+                    markHydratedWhenNotMaterialized: false
+                )
+            } catch {
+                debugSyncLog(
+                    "authoritative recovery failed thread=\(threadID): \(error.localizedDescription)"
+                )
+            }
+        }
+    }
+
     // Thread opening should refresh the visible chat, not refetch the full sidebar list.
     func requestImmediateActiveThreadSync(threadId: String? = nil) {
         guard canRunRealtimeSyncLoop else {
@@ -144,6 +178,39 @@ extension CodexService {
                 await self.syncActiveThreadState(threadId: threadId)
             }
         }
+    }
+
+    // Keeps recovery bounded to high-risk threads so reconnects stay responsive.
+    func authoritativeHistoryRecoveryThreadIDs() -> [String] {
+        var candidates: [String] = []
+        candidates.reserveCapacity(8)
+
+        if let activeThreadId {
+            candidates.append(activeThreadId)
+        }
+
+        for threadID in runningThreadIDs where !candidates.contains(threadID) {
+            candidates.append(threadID)
+            if candidates.count >= 8 {
+                return candidates
+            }
+        }
+
+        let volatileLocalThreadIDs = messagesByThread.compactMap { threadID, messages -> String? in
+            let hasVolatileRows = messages.contains(where: { message in
+                message.deliveryState == .pending || message.isStreaming
+            })
+            return hasVolatileRows ? threadID : nil
+        }
+
+        for threadID in volatileLocalThreadIDs where !candidates.contains(threadID) {
+            candidates.append(threadID)
+            if candidates.count >= 8 {
+                break
+            }
+        }
+
+        return candidates
     }
 
     func syncThreadsList() async {
@@ -802,12 +869,10 @@ extension CodexService {
                 shouldForceResume: shouldRunMirroredCatchup
             )
             didRunMirroredCatchup = outcome.didRunForcedResume
-
-            guard !outcome.didRefreshTurnState || !outcome.isRunning else {
-                return
-            }
         }
 
+        // Keep thread/read as authoritative even while a turn is running so missed
+        // socket deltas recover from the bridge timeline instead of silently dropping.
         if !didRunMirroredCatchup {
             await syncThreadHistory(threadId: threadId, force: true)
         }
@@ -863,34 +928,40 @@ extension CodexService {
             return
         }
 
-        guard backgroundTurnGraceTaskID == .invalid else {
+        guard backgroundTurnGraceTaskID == codexInvalidBackgroundRunGraceTaskID else {
             return
         }
 
+        #if os(iOS)
         let taskID = UIApplication.shared.beginBackgroundTask(withName: "CodexRunGrace") { [weak self] in
             Task { @MainActor [weak self] in
                 self?.endBackgroundRunGraceTask(reason: "expired")
             }
         }
 
-        guard taskID != .invalid else {
+        guard taskID != codexInvalidBackgroundRunGraceTaskID else {
             debugSyncLog("background run grace task unavailable")
             return
         }
 
         backgroundTurnGraceTaskID = taskID
         debugSyncLog("background run grace task started")
+        #endif
     }
 
     func endBackgroundRunGraceTask(reason: String) {
-        guard backgroundTurnGraceTaskID != .invalid else {
+        guard backgroundTurnGraceTaskID != codexInvalidBackgroundRunGraceTaskID else {
             return
         }
 
+        #if os(iOS)
         let taskID = backgroundTurnGraceTaskID
-        backgroundTurnGraceTaskID = .invalid
+        backgroundTurnGraceTaskID = codexInvalidBackgroundRunGraceTaskID
         UIApplication.shared.endBackgroundTask(taskID)
         debugSyncLog("background run grace task ended reason=\(reason)")
+        #else
+        backgroundTurnGraceTaskID = codexInvalidBackgroundRunGraceTaskID
+        #endif
     }
 
     /// Best-effort server-side archive/unarchive. Failures are logged but never

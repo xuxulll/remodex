@@ -4,7 +4,13 @@
 // Exports: CopyBlockButton
 
 import SwiftUI
+#if os(iOS)
+#if os(iOS)
 import UIKit
+#endif
+#elseif os(macOS)
+import AppKit
+#endif
 
 struct CopyBlockButton: View {
     let text: String?
@@ -18,7 +24,7 @@ struct CopyBlockButton: View {
             } else if let text {
                 Button {
                     HapticFeedback.shared.triggerImpactFeedback(style: .light)
-                    UIPasteboard.general.string = text
+                    copyToClipboard(text)
                     withAnimation(.easeInOut(duration: 0.15)) {
                         showCopiedFeedback = true
                     }
@@ -69,6 +75,15 @@ struct CopyBlockButton: View {
         .contentShape(Rectangle())
     }
 
+    private func copyToClipboard(_ value: String) {
+        #if os(iOS)
+        UIPasteboard.general.string = value
+        #elseif os(macOS)
+        let pasteboard = NSPasteboard.general
+        pasteboard.clearContents()
+        pasteboard.setString(value, forType: .string)
+        #endif
+    }
 }
 
 #Preview("Default") {

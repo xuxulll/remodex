@@ -7,46 +7,38 @@
 import SwiftUI
 
 extension TurnGitActionKind {
-    func menuIcon(pointSize: CGFloat = 20) -> UIImage {
-        let cgSize = CGSize(width: pointSize, height: pointSize)
+    var menuAssetName: String? {
         switch self {
         case .syncNow:
-            return Self.resizedSymbol(named: "arrow.trianglehead.2.clockwise.rotate.90", size: cgSize)
+            return nil
         case .commit:
-            return Self.resizedAsset(named: "git-commit", size: cgSize)
+            return "git-commit"
         case .push:
-            return Self.resizedSymbol(named: "arrow.up.circle", size: cgSize)
+            return nil
         case .commitAndPush:
-            return Self.resizedAsset(named: "cloud-upload", size: cgSize)
+            return "cloud-upload"
         case .createPR:
-            return Self.resizedAsset(named: "GitHub_Invertocat_Black", size: cgSize)
+            return "GitHub_Invertocat_Black"
         case .discardRuntimeChangesAndSync:
-            return Self.resizedSymbol(named: "trash.circle", size: cgSize)
+            return nil
         }
     }
 
-    private static func resizedAsset(named name: String, size: CGSize) -> UIImage {
-        guard let original = UIImage(named: name)?.withRenderingMode(.alwaysTemplate) else {
-            return UIImage()
+    var menuSymbolName: String {
+        switch self {
+        case .syncNow:
+            return "arrow.trianglehead.2.clockwise.rotate.90"
+        case .commit:
+            return "circle.fill"
+        case .push:
+            return "arrow.up.circle"
+        case .commitAndPush:
+            return "circle.fill"
+        case .createPR:
+            return "circle.fill"
+        case .discardRuntimeChangesAndSync:
+            return "trash.circle"
         }
-        let renderer = UIGraphicsImageRenderer(size: size)
-        return renderer.image { _ in
-            original.draw(in: CGRect(origin: .zero, size: size))
-        }.withRenderingMode(.alwaysTemplate)
-    }
-
-    private static func resizedSymbol(named name: String, size: CGSize) -> UIImage {
-        let config = UIImage.SymbolConfiguration(pointSize: size.height, weight: .regular)
-        guard let symbol = UIImage(systemName: name, withConfiguration: config)?.withRenderingMode(.alwaysTemplate) else {
-            return UIImage()
-        }
-        let renderer = UIGraphicsImageRenderer(size: size)
-        let scale = min(size.width / symbol.size.width, size.height / symbol.size.height)
-        let scaled = CGSize(width: symbol.size.width * scale, height: symbol.size.height * scale)
-        let origin = CGPoint(x: (size.width - scaled.width) / 2, y: (size.height - scaled.height) / 2)
-        return renderer.image { _ in
-            symbol.draw(in: CGRect(origin: origin, size: scaled))
-        }.withRenderingMode(.alwaysTemplate)
     }
 }
 
@@ -155,7 +147,7 @@ struct TurnGitActionsToolbarButton: View {
             Label {
                 Text(action.title)
             } icon: {
-                Image(uiImage: action.menuIcon())
+                icon(for: action, size: 20)
             }
         }
         .disabled(!isEnabled || disabledActions.contains(action))
@@ -163,11 +155,21 @@ struct TurnGitActionsToolbarButton: View {
 
     @ViewBuilder
     private func toolbarIcon(for action: TurnGitActionKind, size: CGFloat) -> some View {
-        Image(uiImage: action.menuIcon(pointSize: size))
-            .renderingMode(.template)
-            .resizable()
-            .scaledToFit()
-            .foregroundStyle(.primary)
-            .frame(width: size, height: size)
+        icon(for: action, size: size)
+    }
+
+    @ViewBuilder
+    private func icon(for action: TurnGitActionKind, size: CGFloat) -> some View {
+        if let assetName = action.menuAssetName {
+            Image(assetName)
+                .renderingMode(.template)
+                .resizable()
+                .scaledToFit()
+                .frame(width: size, height: size)
+        } else {
+            Image(systemName: action.menuSymbolName)
+                .font(.system(size: size, weight: .regular))
+                .frame(width: size, height: size)
+        }
     }
 }

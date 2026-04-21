@@ -11,6 +11,12 @@ import Security
 extension CodexService {
     // Completes the secure handshake before any JSON-RPC traffic is sent over the relay.
     func performSecureHandshake() async throws {
+        if bypassSecureTransportForCurrentConnection {
+            secureSession = nil
+            secureConnectionState = .encrypted
+            return
+        }
+
         guard let sessionId = normalizedRelaySessionId,
               let macDeviceId = normalizedRelayMacDeviceId else {
             throw CodexSecureTransportError.invalidHandshake(
@@ -223,6 +229,10 @@ extension CodexService {
 
     // Encrypts JSON-RPC requests/responses before they leave the iPhone.
     func secureWireText(for plaintext: String) throws -> String {
+        if bypassSecureTransportForCurrentConnection {
+            return plaintext
+        }
+
         guard var secureSession else {
             throw CodexSecureTransportError.invalidHandshake(
                 "The secure Remodex session is not ready yet. Try reconnecting."

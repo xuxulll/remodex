@@ -1,30 +1,18 @@
 // FILE: BridgeControlService.swift
-// Purpose: Wraps the existing remodex/npm shell commands so the menu bar app can detect the global CLI and control the bridge.
+// Purpose: Native macOS bridge runtime orchestration (no npm bridge dependency), plus compatibility wrappers used by menu bar UI.
 // Layer: Companion app service
 // Exports: BridgeControlService, ShellCommandRunner
-// Depends on: Foundation, BridgeControlModels
+// Depends on: Foundation, CryptoKit, Security, BridgeControlModels
 
+import CryptoKit
 import Foundation
-
-struct BridgeCLIInvocation {
-    let nodePath: String
-    let remodexPath: String
-
-    // Executes the actual CLI entrypoint via an absolute Node binary so GUI PATH drift does not break nvm installs.
-    func command(_ arguments: [String]) -> String {
-        ([shellQuoted(nodePath), shellQuoted(remodexPath)] + arguments).joined(separator: " ")
-    }
-}
-
-struct ShellCommandResult {
-    let stdout: String
-    let stderr: String
-    let exitCode: Int32
-}
+import Security
 
 enum BridgeControlError: LocalizedError {
     case commandFailed(command: String, message: String)
     case invalidSnapshot(String)
+    case runtimeUnavailable(String)
+    case unsupportedOperation(String)
 
     var errorDescription: String? {
         switch self {
@@ -32,12 +20,15 @@ enum BridgeControlError: LocalizedError {
             return message
         case .invalidSnapshot(let message):
             return message
+        case .runtimeUnavailable(let message):
+            return message
+        case .unsupportedOperation(let message):
+            return message
         }
     }
 }
 
 final class ShellCommandRunner {
-    // Runs a login shell so Homebrew, nvm, asdf, and other user PATH customizations resolve naturally.
     func run(command: String, environment: [String: String] = [:]) async throws -> ShellCommandResult {
         try await Task.detached(priority: .userInitiated) {
             let process = Process()
@@ -51,7 +42,7 @@ final class ShellCommandRunner {
             }
 
             process.executableURL = URL(fileURLWithPath: "/bin/zsh")
-            process.arguments = ["-lc", self.wrappedShellCommand(command)]
+            process.arguments = ["-lc", command]
             process.currentDirectoryURL = URL(fileURLWithPath: NSHomeDirectory())
             process.environment = ProcessInfo.processInfo.environment.merging(environment) { _, override in
                 override
@@ -81,439 +72,568 @@ final class ShellCommandRunner {
             return result
         }.value
     }
-
-    // Silently loads interactive zsh PATH customizations so GUI-launched commands see the same global CLI install as Terminal.
-    private func wrappedShellCommand(_ command: String) -> String {
-        [
-            "export TERM=dumb",
-            "source ~/.zshrc >/dev/null 2>/dev/null || true",
-            command,
-        ].joined(separator: "; ")
-    }
 }
 
-final class BridgeControlService {
-    private let runner: ShellCommandRunner
-    private let decoder = JSONDecoder()
+struct ShellCommandResult {
+    let stdout: String
+    let stderr: String
+    let exitCode: Int32
+}
+
+private final class NativeBridgeStateStore: BridgeStatePersisting {
     private let fileManager = FileManager.default
-    private let defaultStateDirectory = URL(fileURLWithPath: NSHomeDirectory())
-        .appendingPathComponent(".remodex", isDirectory: true)
-    private let launchAgentPlistURL = URL(fileURLWithPath: NSHomeDirectory())
-        .appendingPathComponent("Library", isDirectory: true)
-        .appendingPathComponent("LaunchAgents", isDirectory: true)
-        .appendingPathComponent("com.remodex.bridge.plist")
+    private let decoder = JSONDecoder()
+    private let encoder = JSONEncoder()
+    private let stateDirectory: URL
+    private let snapshotURL: URL
+    private let trustedStateURL: URL
+    private let securityService = "cn.stackapp.remodex.bridgecore"
+    private let trustedKeychainAccount = "trusted-state"
 
-    init(runner: ShellCommandRunner = ShellCommandRunner()) {
-        self.runner = runner
+    init() {
+        self.stateDirectory = URL(fileURLWithPath: NSHomeDirectory())
+            .appendingPathComponent(".remodex-native", isDirectory: true)
+        self.snapshotURL = stateDirectory.appendingPathComponent("bridge-snapshot.json")
+        self.trustedStateURL = stateDirectory.appendingPathComponent("trusted-state.json")
+        encoder.outputFormatting = [.sortedKeys, .prettyPrinted]
     }
 
-    // Confirms the product contract for this companion: a global `remodex` CLI must be runnable first.
-    func detectCLIAvailability() async -> BridgeCLIAvailability {
-        do {
-            let invocation = try await resolveCLIInvocation()
-            let result = try await runner.run(command: invocation.command(["--version"]))
-            guard let version = parseLatestVersion(result.stdout) else {
-                return .broken(message: "The installed CLI returned an unreadable version.")
-            }
-
-            return .available(version: version)
-        } catch {
-            return classifyCLIAvailability(from: error)
-        }
-    }
-
-    // Loads the daemon snapshot from the CLI so the menu bar stays aligned with the package's real control plane.
-    func loadSnapshot(relayOverride: String?) async throws -> BridgeSnapshot {
-        let invocation = try await resolveCLIInvocation()
-        let result = try await runner.run(
-            command: invocation.command(["status", "--json"]),
-            environment: commandEnvironment(relayOverride: relayOverride)
-        )
-        guard let data = result.stdout.data(using: .utf8) else {
-            throw BridgeControlError.invalidSnapshot("Bridge status returned invalid UTF-8.")
+    func readSnapshot() throws -> BridgeSnapshot {
+        try ensureStateDirectory()
+        guard let data = try? Data(contentsOf: snapshotURL) else {
+            return defaultSnapshot()
         }
 
         do {
             return try decoder.decode(BridgeSnapshot.self, from: data)
         } catch {
-            return try await loadFallbackSnapshot(from: result.stdout, invocation: invocation)
+            throw BridgeControlError.invalidSnapshot("Bridge snapshot is unreadable.")
         }
     }
 
-    func startBridge(relayOverride: String?) async throws {
-        let invocation = try await resolveCLIInvocation()
-        _ = try await runner.run(
-            command: invocation.command(["start"]),
-            environment: commandEnvironment(relayOverride: relayOverride)
-        )
+    func writeSnapshot(_ snapshot: BridgeSnapshot) throws {
+        try ensureStateDirectory()
+        let data = try encoder.encode(snapshot)
+        try data.write(to: snapshotURL, options: .atomic)
     }
 
-    func stopBridge(relayOverride: String?) async throws {
-        let invocation = try await resolveCLIInvocation()
-        _ = try await runner.run(
-            command: invocation.command(["stop"]),
-            environment: commandEnvironment(relayOverride: relayOverride)
-        )
+    func readTrustedState() throws -> BridgeTrustedState {
+        try ensureStateDirectory()
+
+        if let keychainData = readKeychainData(account: trustedKeychainAccount),
+           let trusted = try? decoder.decode(BridgeTrustedState.self, from: keychainData) {
+            return trusted
+        }
+
+        if let data = try? Data(contentsOf: trustedStateURL),
+           let trusted = try? decoder.decode(BridgeTrustedState.self, from: data) {
+            return trusted
+        }
+
+        let trusted = makeNewTrustedState()
+        try writeTrustedState(trusted)
+        return trusted
     }
 
-    func resumeLastThread(relayOverride: String?) async throws {
-        let invocation = try await resolveCLIInvocation()
-        _ = try await runner.run(
-            command: invocation.command(["resume"]),
-            environment: commandEnvironment(relayOverride: relayOverride)
-        )
+    func writeTrustedState(_ trustedState: BridgeTrustedState) throws {
+        try ensureStateDirectory()
+        let data = try encoder.encode(trustedState)
+        try data.write(to: trustedStateURL, options: .atomic)
+        writeKeychainData(data, account: trustedKeychainAccount)
     }
 
-    func resetPairing(relayOverride: String?) async throws {
-        let invocation = try await resolveCLIInvocation()
-        _ = try await runner.run(
-            command: invocation.command(["reset-pairing"]),
-            environment: commandEnvironment(relayOverride: relayOverride)
-        )
-    }
+    private func ensureStateDirectory() throws {
+        if !fileManager.fileExists(atPath: stateDirectory.path) {
+            try fileManager.createDirectory(at: stateDirectory, withIntermediateDirectories: true)
+        }
 
-    func updateBridgePackage() async throws {
-        _ = try await runner.run(command: "npm install -g remodex@latest")
-    }
-
-    func fetchLatestPackageVersion() async -> Result<String, Error> {
-        do {
-            let result = try await runner.run(command: "npm view remodex version --json")
-            let latestVersion = parseLatestVersion(result.stdout)
-            guard let latestVersion else {
-                throw BridgeControlError.commandFailed(
-                    command: "npm view remodex version --json",
-                    message: "npm returned an unreadable version."
-                )
-            }
-            return .success(latestVersion)
-        } catch {
-            return .failure(error)
+        let logsDirectory = stateDirectory.appendingPathComponent("logs", isDirectory: true)
+        if !fileManager.fileExists(atPath: logsDirectory.path) {
+            try fileManager.createDirectory(at: logsDirectory, withIntermediateDirectories: true)
         }
     }
 
-    private func parseLatestVersion(_ output: String) -> String? {
-        guard !output.isEmpty else {
-            return nil
-        }
-
-        if let data = output.data(using: .utf8),
-           let stringValue = try? decoder.decode(String.self, from: data),
-           !stringValue.isEmpty {
-            return stringValue
-        }
-
-        let trimmed = output.trimmingCharacters(in: .whitespacesAndNewlines)
-        return trimmed.isEmpty ? nil : trimmed
-    }
-
-    // Falls back to the daemon-state files when the global CLI still prints human-readable status output.
-    private func loadFallbackSnapshot(
-        from statusOutput: String,
-        invocation: BridgeCLIInvocation
-    ) async throws -> BridgeSnapshot {
-        let statusLines = parseStatusLines(statusOutput)
-        guard !statusLines.isEmpty else {
-            throw BridgeControlError.invalidSnapshot("Bridge status returned malformed JSON.")
-        }
-
-        let versionResult = try await runner.run(command: invocation.command(["--version"]))
-        guard let currentVersion = parseLatestVersion(versionResult.stdout) else {
-            throw BridgeControlError.invalidSnapshot("Bridge status returned an unreadable CLI version.")
-        }
-
-        let stateDirectory = resolveStateDirectory(statusLines: statusLines)
-        let daemonConfig: BridgeDaemonConfig? = readStateFile(named: "daemon-config.json", in: stateDirectory)
-        let bridgeStatus: BridgeRuntimeStatus? = readStateFile(named: "bridge-status.json", in: stateDirectory)
-        let pairingSession: BridgePairingSession? = readStateFile(named: "pairing-session.json", in: stateDirectory)
-        let stdoutLogPath = statusLines["stdout log"] ?? stateDirectory.appendingPathComponent("logs/bridge.stdout.log").path
-        let stderrLogPath = statusLines["stderr log"] ?? stateDirectory.appendingPathComponent("logs/bridge.stderr.log").path
-        let launchdPid = parsePid(statusLines["pid"])
-        let launchdLoaded = parseYesNo(statusLines["launchd loaded"]) ?? false
-        let installed = parseYesNo(statusLines["installed"]) ?? fileManager.fileExists(atPath: launchAgentPlistURL.path)
-
+    private func defaultSnapshot() -> BridgeSnapshot {
+        let logsDirectory = stateDirectory.appendingPathComponent("logs", isDirectory: true)
         return BridgeSnapshot(
-            currentVersion: currentVersion,
-            label: statusLines["service label"] ?? "com.remodex.bridge",
+            currentVersion: "bridgecore-dev",
+            label: "com.remodex.bridgecore",
             platform: "darwin",
-            installed: installed,
-            launchdLoaded: launchdLoaded,
-            launchdPid: launchdPid,
-            daemonConfig: daemonConfig,
-            bridgeStatus: bridgeStatus,
-            pairingSession: pairingSession,
-            stdoutLogPath: stdoutLogPath,
-            stderrLogPath: stderrLogPath
+            installed: true,
+            launchdLoaded: false,
+            launchdPid: nil,
+            daemonConfig: BridgeDaemonConfig(
+                relayUrl: "ws://localhost:9000/relay",
+                pushServiceUrl: nil,
+                codexEndpoint: nil,
+                refreshEnabled: true
+            ),
+            bridgeStatus: BridgeRuntimeStatus(
+                state: "stopped",
+                connectionStatus: "idle",
+                pid: nil,
+                lastError: nil,
+                updatedAt: Self.isoTimestamp()
+            ),
+            pairingSession: nil,
+            stdoutLogPath: logsDirectory.appendingPathComponent("bridge.stdout.log").path,
+            stderrLogPath: logsDirectory.appendingPathComponent("bridge.stderr.log").path
         )
     }
 
-    // Resolves both the CLI script and the Node runtime from stable absolute paths before the menu bar invokes them.
-    private func resolveCLIInvocation() async throws -> BridgeCLIInvocation {
-        let remodexPath = try await resolveExecutable(named: "remodex")
-        let nodePath = try await resolveNodePath(for: remodexPath)
-        return BridgeCLIInvocation(nodePath: nodePath, remodexPath: remodexPath)
+    private func makeNewTrustedState() -> BridgeTrustedState {
+        let privateKey = P256.Signing.PrivateKey()
+        let publicKey = privateKey.publicKey.rawRepresentation.base64EncodedString()
+        return BridgeTrustedState(
+            macDeviceId: UUID().uuidString,
+            macIdentityPublicKey: publicKey,
+            relaySessionId: UUID().uuidString,
+            keyEpoch: 1,
+            trustedPhoneDeviceID: nil,
+            lastUpdatedAtISO8601: Self.isoTimestamp()
+        )
     }
 
-    private func parseStatusLines(_ output: String) -> [String: String] {
-        output
-            .split(separator: "\n", omittingEmptySubsequences: true)
-            .reduce(into: [String: String]()) { partialResult, line in
-                let cleaned = line.trimmingCharacters(in: .whitespacesAndNewlines)
-                let prefix = "[remodex] "
-                guard cleaned.hasPrefix(prefix) else {
-                    return
-                }
-
-                let payload = cleaned.dropFirst(prefix.count)
-                guard let separatorIndex = payload.firstIndex(of: ":") else {
-                    return
-                }
-
-                let key = payload[..<separatorIndex]
-                    .trimmingCharacters(in: .whitespacesAndNewlines)
-                    .lowercased()
-                let value = payload[payload.index(after: separatorIndex)...]
-                    .trimmingCharacters(in: .whitespacesAndNewlines)
-                partialResult[key] = value
-            }
+    private static func isoTimestamp(_ date: Date = Date()) -> String {
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        return formatter.string(from: date)
     }
 
-    private func parseYesNo(_ value: String?) -> Bool? {
-        switch value?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() {
-        case "yes":
-            return true
-        case "no":
-            return false
-        default:
-            return nil
-        }
-    }
-
-    private func parsePid(_ value: String?) -> Int? {
-        guard let value = value?.trimmingCharacters(in: .whitespacesAndNewlines),
-              let pid = Int(value) else {
-            return nil
-        }
-
-        return pid
-    }
-
-    // Reads daemon-state files from the same state root used by the bridge service.
-    private func readStateFile<T: Decodable>(named filename: String, in stateDirectory: URL) -> T? {
-        let targetURL = stateDirectory.appendingPathComponent(filename)
-        guard let data = try? Data(contentsOf: targetURL) else {
-            return nil
-        }
-
-        return try? decoder.decode(T.self, from: data)
-    }
-
-    // Prefers the Node runtime sitting next to the resolved CLI binary so mixed installs stay compatible.
-    private func resolveNodePath(for remodexPath: String) async throws -> String {
-        if let colocatedNodePath = resolveColocatedNodePath(for: remodexPath) {
-            return colocatedNodePath
-        }
-
-        return try await resolveExecutable(named: "node")
-    }
-
-    private func resolveColocatedNodePath(for remodexPath: String) -> String? {
-        let remodexURL = URL(fileURLWithPath: remodexPath)
-        let candidateDirectories = [
-            remodexURL.deletingLastPathComponent().path,
-            remodexURL.resolvingSymlinksInPath().deletingLastPathComponent().path,
+    private func readKeychainData(account: String) -> Data? {
+        let query: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: securityService,
+            kSecAttrAccount as String: account,
+            kSecReturnData as String: true,
+            kSecMatchLimit as String: kSecMatchLimitOne,
         ]
 
-        var seenDirectories = Set<String>()
-        for directory in candidateDirectories where seenDirectories.insert(directory).inserted {
-            let candidate = URL(fileURLWithPath: directory, isDirectory: true)
-                .appendingPathComponent("node")
-                .path
-            if fileManager.isExecutableFile(atPath: candidate) {
-                return candidate
+        var result: AnyObject?
+        let status = SecItemCopyMatching(query as CFDictionary, &result)
+        guard status == errSecSuccess else {
+            return nil
+        }
+        return result as? Data
+    }
+
+    private func writeKeychainData(_ data: Data, account: String) {
+        let baseQuery: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: securityService,
+            kSecAttrAccount as String: account,
+        ]
+        SecItemDelete(baseQuery as CFDictionary)
+
+        var add = baseQuery
+        add[kSecValueData as String] = data
+        SecItemAdd(add as CFDictionary, nil)
+    }
+}
+
+private final class NativePairingService {
+    func makePairingPayload(
+        relayURL: String,
+        trustedState: BridgeTrustedState,
+        ttlSeconds: Int64 = 5 * 60
+    ) -> BridgePairingPayload {
+        let expiresAt = Int64(Date().timeIntervalSince1970 * 1000) + (ttlSeconds * 1000)
+        return BridgePairingPayload(
+            v: 2,
+            relay: relayURL,
+            sessionId: trustedState.relaySessionId,
+            macDeviceId: trustedState.macDeviceId,
+            macIdentityPublicKey: trustedState.macIdentityPublicKey,
+            expiresAt: expiresAt
+        )
+    }
+}
+
+private final class NativeSecureChannelService: SecureTransporting {
+    private var keyEpoch = 1
+    private var sessionID = UUID().uuidString
+    private var symmetricKey = SymmetricKey(size: .bits256)
+    private var lastAppliedOutboundSequence = 0
+
+    func beginHandshake() async throws -> BridgeHandshakeState {
+        keyEpoch += 1
+        sessionID = UUID().uuidString
+        symmetricKey = SymmetricKey(size: .bits256)
+        return BridgeHandshakeState(
+            keyEpoch: keyEpoch,
+            sessionId: sessionID,
+            startedAt: Date()
+        )
+    }
+
+    func encryptEnvelope(_ payload: String) throws -> BridgeSecureEnvelope {
+        let payloadData = Data(payload.utf8)
+        let sealed = try AES.GCM.seal(payloadData, using: symmetricKey)
+        return BridgeSecureEnvelope(
+            nonce: sealed.nonce.withUnsafeBytes { Data($0).base64EncodedString() },
+            ciphertext: sealed.ciphertext.base64EncodedString(),
+            tag: sealed.tag.base64EncodedString()
+        )
+    }
+
+    func decryptEnvelope(_ envelope: BridgeSecureEnvelope) throws -> String {
+        guard let nonceData = Data(base64Encoded: envelope.nonce),
+              let nonce = try? AES.GCM.Nonce(data: nonceData),
+              let ciphertext = Data(base64Encoded: envelope.ciphertext),
+              let tag = Data(base64Encoded: envelope.tag) else {
+            throw BridgeControlError.runtimeUnavailable("Encrypted payload is malformed.")
+        }
+
+        let box = try AES.GCM.SealedBox(nonce: nonce, ciphertext: ciphertext, tag: tag)
+        let opened = try AES.GCM.open(box, using: symmetricKey)
+        return String(data: opened, encoding: .utf8) ?? ""
+    }
+
+    func applyResumeState(_ state: BridgeResumeState) {
+        lastAppliedOutboundSequence = max(lastAppliedOutboundSequence, state.lastAppliedOutboundSequence)
+    }
+}
+
+private final class NativeCodexRuntimeHost: CodexHosting {
+    private static let localAppServerListenURL = "ws://127.0.0.1:9101"
+    private let runner: ShellCommandRunner
+    private let stateStore: NativeBridgeStateStore
+    private let callbackQueue = DispatchQueue(label: "bridgecore.codex.stream", qos: .utility)
+    private var process: Process?
+    private var stdoutHandle: FileHandle?
+    private var stderrHandle: FileHandle?
+
+    init(runner: ShellCommandRunner, stateStore: NativeBridgeStateStore) {
+        self.runner = runner
+        self.stateStore = stateStore
+    }
+
+    func launch() async throws -> BridgeRuntimeProcessState {
+        if let process, process.isRunning {
+            return BridgeRuntimeProcessState(processIdentifier: Int(process.processIdentifier), startedAt: Date())
+        }
+
+        let codexPath = try await resolveCodexPath()
+        let snapshot = try stateStore.readSnapshot()
+        let stdoutURL = URL(fileURLWithPath: snapshot.stdoutLogPath)
+        let stderrURL = URL(fileURLWithPath: snapshot.stderrLogPath)
+
+        let stdout = try FileHandle(forWritingTo: ensureLogFile(stdoutURL))
+        let stderr = try FileHandle(forWritingTo: ensureLogFile(stderrURL))
+        let nextProcess = Process()
+        nextProcess.executableURL = URL(fileURLWithPath: codexPath)
+        nextProcess.arguments = ["app-server", "--listen", Self.localAppServerListenURL]
+        nextProcess.currentDirectoryURL = URL(fileURLWithPath: NSHomeDirectory())
+        nextProcess.standardOutput = stdout
+        nextProcess.standardError = stderr
+        nextProcess.terminationHandler = { [weak self] _ in
+            self?.process = nil
+        }
+
+        try nextProcess.run()
+        process = nextProcess
+        stdoutHandle = stdout
+        stderrHandle = stderr
+
+        return BridgeRuntimeProcessState(processIdentifier: Int(nextProcess.processIdentifier), startedAt: Date())
+    }
+
+    func shutdown() async {
+        guard let process else {
+            return
+        }
+        if process.isRunning {
+            process.terminate()
+            process.waitUntilExit()
+        }
+        try? stdoutHandle?.close()
+        try? stderrHandle?.close()
+        stdoutHandle = nil
+        stderrHandle = nil
+        self.process = nil
+    }
+
+    func sendRPC(_ payload: String) async throws -> String {
+        let trimmed = payload.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else {
+            throw BridgeControlError.unsupportedOperation("RPC payload cannot be empty.")
+        }
+
+        throw BridgeControlError.unsupportedOperation(
+            "Direct Codex app-server RPC passthrough is not exposed yet in this build."
+        )
+    }
+
+    func streamEvents(_ onEvent: @escaping @Sendable (String) -> Void) async {
+        guard let process, process.isRunning else {
+            return
+        }
+
+        callbackQueue.async {
+            onEvent("codex-runtime-online")
+        }
+    }
+
+    func runtimeAvailability() async -> BridgeCLIAvailability {
+        do {
+            let codexPath = try await resolveCodexPath()
+            let result = try await runner.run(command: "\(shellQuoted(codexPath)) --version")
+            let version = result.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+            return .available(version: version.isEmpty ? "unknown" : version)
+        } catch {
+            let message = error.localizedDescription
+            let normalized = message.lowercased()
+            if normalized.contains("command not found") || normalized.contains("not found") {
+                return .missing
+            }
+            return .broken(message: message)
+        }
+    }
+
+    private func resolveCodexPath() async throws -> String {
+        if let discovered = try? await runner.run(command: "command -v codex") {
+            let path = discovered.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !path.isEmpty {
+                return path
             }
         }
 
-        return nil
-    }
-
-    private func resolveExecutable(named name: String) async throws -> String {
-        if let discovered = try? await runner.run(command: "command -v \(name)"),
-           let path = parseExecutablePath(discovered.stdout),
-           fileManager.isExecutableFile(atPath: path) {
-            return path
-        }
-
-        if let fallback = fallbackExecutableCandidates(named: name).first(where: { fileManager.isExecutableFile(atPath: $0) }) {
+        let fallbackPaths = [
+            "/opt/homebrew/bin/codex",
+            "/usr/local/bin/codex",
+            "\(NSHomeDirectory())/.local/bin/codex",
+        ]
+        if let fallback = fallbackPaths.first(where: { FileManager.default.isExecutableFile(atPath: $0) }) {
             return fallback
         }
 
-        throw BridgeControlError.commandFailed(
-            command: name,
-            message: "\(name) was not found in the app shell environment."
+        throw BridgeControlError.runtimeUnavailable(
+            "Codex CLI is not installed or not visible. Install Codex CLI and retry."
         )
     }
 
-    private func parseExecutablePath(_ output: String) -> String? {
-        let path = output.trimmingCharacters(in: .whitespacesAndNewlines)
-        return path.isEmpty ? nil : path
+    private func ensureLogFile(_ fileURL: URL) -> URL {
+        let fileManager = FileManager.default
+        let directory = fileURL.deletingLastPathComponent()
+        if !fileManager.fileExists(atPath: directory.path) {
+            try? fileManager.createDirectory(at: directory, withIntermediateDirectories: true)
+        }
+        if !fileManager.fileExists(atPath: fileURL.path) {
+            fileManager.createFile(atPath: fileURL.path, contents: Data())
+        }
+        return fileURL
+    }
+}
+
+private final class NativeBridgeRuntimeController: BridgeRuntimeControlling {
+    private let stateStore: NativeBridgeStateStore
+    private let codexHost: NativeCodexRuntimeHost
+    private let secureChannel: NativeSecureChannelService
+    private let pairingService: NativePairingService
+
+    init(
+        stateStore: NativeBridgeStateStore,
+        codexHost: NativeCodexRuntimeHost,
+        secureChannel: NativeSecureChannelService,
+        pairingService: NativePairingService
+    ) {
+        self.stateStore = stateStore
+        self.codexHost = codexHost
+        self.secureChannel = secureChannel
+        self.pairingService = pairingService
     }
 
-    private func fallbackExecutableCandidates(named name: String) -> [String] {
-        let homeDirectory = NSHomeDirectory()
-        let stableCandidates = [
-            "/opt/homebrew/bin/\(name)",
-            "/usr/local/bin/\(name)",
-            "\(homeDirectory)/.local/bin/\(name)",
-            "\(homeDirectory)/.volta/bin/\(name)",
-        ]
+    func start() async throws {
+        let processState = try await codexHost.launch()
+        _ = try await secureChannel.beginHandshake()
+        let trusted = try stateStore.readTrustedState()
+        let current = try stateStore.readSnapshot()
+        let relayURL = current.daemonConfig?.relayUrl ?? "ws://localhost:9000/relay"
+        let pairingPayload = pairingService.makePairingPayload(relayURL: relayURL, trustedState: trusted)
 
-        return stableCandidates + nvmExecutableCandidates(named: name, homeDirectory: homeDirectory)
+        let next = BridgeSnapshot(
+            currentVersion: current.currentVersion,
+            label: current.label,
+            platform: current.platform,
+            installed: true,
+            launchdLoaded: true,
+            launchdPid: processState.processIdentifier,
+            daemonConfig: current.daemonConfig,
+            bridgeStatus: BridgeRuntimeStatus(
+                state: "running",
+                connectionStatus: "connected",
+                pid: processState.processIdentifier,
+                lastError: nil,
+                updatedAt: Self.isoTimestamp()
+            ),
+            pairingSession: BridgePairingSession(
+                createdAt: Self.isoTimestamp(),
+                pairingPayload: pairingPayload
+            ),
+            stdoutLogPath: current.stdoutLogPath,
+            stderrLogPath: current.stderrLogPath
+        )
+
+        try stateStore.writeSnapshot(next)
     }
 
-    private func nvmExecutableCandidates(named name: String, homeDirectory: String) -> [String] {
-        let versionsDirectory = URL(fileURLWithPath: homeDirectory)
-            .appendingPathComponent(".nvm", isDirectory: true)
-            .appendingPathComponent("versions", isDirectory: true)
-            .appendingPathComponent("node", isDirectory: true)
-
-        guard let contents = try? fileManager.contentsOfDirectory(
-            at: versionsDirectory,
-            includingPropertiesForKeys: [.isDirectoryKey],
-            options: [.skipsHiddenFiles]
-        ) else {
-            return []
-        }
-
-        return contents
-            .sorted { compareVersionDirectoryNames($0.lastPathComponent, $1.lastPathComponent) == .orderedDescending }
-            .map { $0.appendingPathComponent("bin", isDirectory: true).appendingPathComponent(name).path }
+    func stop() async throws {
+        await codexHost.shutdown()
+        let current = try stateStore.readSnapshot()
+        let next = BridgeSnapshot(
+            currentVersion: current.currentVersion,
+            label: current.label,
+            platform: current.platform,
+            installed: current.installed,
+            launchdLoaded: false,
+            launchdPid: nil,
+            daemonConfig: current.daemonConfig,
+            bridgeStatus: BridgeRuntimeStatus(
+                state: "stopped",
+                connectionStatus: "idle",
+                pid: nil,
+                lastError: nil,
+                updatedAt: Self.isoTimestamp()
+            ),
+            pairingSession: current.pairingSession,
+            stdoutLogPath: current.stdoutLogPath,
+            stderrLogPath: current.stderrLogPath
+        )
+        try stateStore.writeSnapshot(next)
     }
 
-    // Mirrors the bridge daemon-state lookup order so old CLI output still hydrates the companion correctly.
-    private func resolveStateDirectory(statusLines: [String: String]) -> URL {
-        if let explicitStateDirectory = normalizeNonEmptyString(ProcessInfo.processInfo.environment["REMODEX_DEVICE_STATE_DIR"]) {
-            return URL(fileURLWithPath: explicitStateDirectory, isDirectory: true)
-        }
-
-        if let installedStateDirectory = readLaunchAgentStateDirectory() {
-            return installedStateDirectory
-        }
-
-        if let derivedStateDirectory = deriveStateDirectory(fromLogPath: statusLines["stdout log"] ?? statusLines["stderr log"]) {
-            return derivedStateDirectory
-        }
-
-        return defaultStateDirectory
+    func status() async throws -> BridgeSnapshot {
+        try stateStore.readSnapshot()
     }
 
-    private func readLaunchAgentStateDirectory() -> URL? {
-        guard let data = try? Data(contentsOf: launchAgentPlistURL),
-              let plist = try? PropertyListSerialization.propertyList(from: data, options: [], format: nil) as? [String: Any],
-              let environment = plist["EnvironmentVariables"] as? [String: Any],
-              let stateDirectory = normalizeNonEmptyString(environment["REMODEX_DEVICE_STATE_DIR"] as? String) else {
-            return nil
-        }
+    func resetPairing() async throws {
+        let currentTrusted = try stateStore.readTrustedState()
+        let rotated = BridgeTrustedState(
+            macDeviceId: currentTrusted.macDeviceId,
+            macIdentityPublicKey: currentTrusted.macIdentityPublicKey,
+            relaySessionId: UUID().uuidString,
+            keyEpoch: currentTrusted.keyEpoch + 1,
+            trustedPhoneDeviceID: nil,
+            lastUpdatedAtISO8601: Self.isoTimestamp()
+        )
+        try stateStore.writeTrustedState(rotated)
 
-        return URL(fileURLWithPath: stateDirectory, isDirectory: true)
+        let current = try stateStore.readSnapshot()
+        let next = BridgeSnapshot(
+            currentVersion: current.currentVersion,
+            label: current.label,
+            platform: current.platform,
+            installed: current.installed,
+            launchdLoaded: current.launchdLoaded,
+            launchdPid: current.launchdPid,
+            daemonConfig: current.daemonConfig,
+            bridgeStatus: BridgeRuntimeStatus(
+                state: current.bridgeStatus?.state,
+                connectionStatus: current.bridgeStatus?.connectionStatus,
+                pid: current.bridgeStatus?.pid,
+                lastError: nil,
+                updatedAt: Self.isoTimestamp()
+            ),
+            pairingSession: nil,
+            stdoutLogPath: current.stdoutLogPath,
+            stderrLogPath: current.stderrLogPath
+        )
+        try stateStore.writeSnapshot(next)
     }
 
-    private func deriveStateDirectory(fromLogPath logPath: String?) -> URL? {
-        guard let logPath = normalizeNonEmptyString(logPath) else {
-            return nil
-        }
-
-        return URL(fileURLWithPath: logPath)
-            .deletingLastPathComponent()
-            .deletingLastPathComponent()
+    func resumeThread() async throws {
+        _ = try await codexHost.sendRPC("{\"method\":\"thread/resume\",\"params\":{}}")
     }
 
-    private func compareVersionDirectoryNames(_ lhs: String, _ rhs: String) -> ComparisonResult {
-        let lhsVersion = parseVersionDirectoryName(lhs)
-        let rhsVersion = parseVersionDirectoryName(rhs)
+    private static func isoTimestamp(_ date: Date = Date()) -> String {
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        return formatter.string(from: date)
+    }
+}
 
-        switch (lhsVersion, rhsVersion) {
-        case let (.some(lhsVersion), .some(rhsVersion)):
-            return compareVersionComponents(lhsVersion, rhsVersion)
-        case (.some, .none):
-            return .orderedDescending
-        case (.none, .some):
-            return .orderedAscending
-        case (.none, .none):
-            return lhs.localizedStandardCompare(rhs)
-        }
+final class BridgeControlService {
+    private let runner: ShellCommandRunner
+    private let runtimeHost: NativeCodexRuntimeHost
+    private let runtimeController: NativeBridgeRuntimeController
+
+    init(runner: ShellCommandRunner = ShellCommandRunner()) {
+        let stateStore = NativeBridgeStateStore()
+        let secureChannel = NativeSecureChannelService()
+        let pairingService = NativePairingService()
+        let runtimeHost = NativeCodexRuntimeHost(runner: runner, stateStore: stateStore)
+
+        self.runner = runner
+        self.runtimeHost = runtimeHost
+        self.runtimeController = NativeBridgeRuntimeController(
+            stateStore: stateStore,
+            codexHost: runtimeHost,
+            secureChannel: secureChannel,
+            pairingService: pairingService
+        )
     }
 
-    private func parseVersionDirectoryName(_ value: String) -> [Int]? {
-        let normalized = value
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-            .replacingOccurrences(of: "v", with: "", options: [.anchored])
-        let coreVersion = normalized.split(separator: "-", maxSplits: 1, omittingEmptySubsequences: true).first
-        guard let coreVersion else {
-            return nil
-        }
-
-        let parts = coreVersion.split(separator: ".", omittingEmptySubsequences: false)
-        guard !parts.isEmpty else {
-            return nil
-        }
-
-        let numericParts = parts.compactMap { Int($0) }
-        guard numericParts.count == parts.count else {
-            return nil
-        }
-
-        return numericParts
+    func detectCLIAvailability() async -> BridgeCLIAvailability {
+        await runtimeHost.runtimeAvailability()
     }
 
-    private func compareVersionComponents(_ lhs: [Int], _ rhs: [Int]) -> ComparisonResult {
-        for index in 0..<max(lhs.count, rhs.count) {
-            let lhsValue = index < lhs.count ? lhs[index] : 0
-            let rhsValue = index < rhs.count ? rhs[index] : 0
-
-            if lhsValue == rhsValue {
-                continue
-            }
-
-            return lhsValue < rhsValue ? .orderedAscending : .orderedDescending
-        }
-
-        return .orderedSame
-    }
-
-    private func normalizeNonEmptyString(_ value: String?) -> String? {
-        guard let value else {
-            return nil
-        }
-
-        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
-        return trimmed.isEmpty ? nil : trimmed
-    }
-
-    // Maps shell failures into the explicit "missing global CLI" state shown by the menu bar.
-    private func classifyCLIAvailability(from error: Error) -> BridgeCLIAvailability {
-        let message = error.localizedDescription.trimmingCharacters(in: .whitespacesAndNewlines)
-        let normalized = message.lowercased()
-
-        if normalized.contains("command not found: remodex")
-            || normalized.contains("remodex: command not found")
-            || normalized.contains("remodex: not found")
-            || normalized.contains("no such file or directory") {
-            return .missing
-        }
-
-        return .broken(message: message.isEmpty ? "The CLI returned an unknown error." : message)
-    }
-
-    private func commandEnvironment(relayOverride: String?) -> [String: String] {
+    func loadSnapshot(relayOverride: String?) async throws -> BridgeSnapshot {
+        let snapshot = try await runtimeController.status()
         guard let relayOverride,
               !relayOverride.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
-            return [:]
+            return snapshot
         }
 
-        return [
-            "REMODEX_RELAY": relayOverride.trimmingCharacters(in: .whitespacesAndNewlines),
-        ]
+        let daemonConfig = BridgeDaemonConfig(
+            relayUrl: relayOverride.trimmingCharacters(in: .whitespacesAndNewlines),
+            pushServiceUrl: snapshot.daemonConfig?.pushServiceUrl,
+            codexEndpoint: snapshot.daemonConfig?.codexEndpoint,
+            refreshEnabled: snapshot.daemonConfig?.refreshEnabled
+        )
+
+        return BridgeSnapshot(
+            currentVersion: snapshot.currentVersion,
+            label: snapshot.label,
+            platform: snapshot.platform,
+            installed: snapshot.installed,
+            launchdLoaded: snapshot.launchdLoaded,
+            launchdPid: snapshot.launchdPid,
+            daemonConfig: daemonConfig,
+            bridgeStatus: snapshot.bridgeStatus,
+            pairingSession: snapshot.pairingSession,
+            stdoutLogPath: snapshot.stdoutLogPath,
+            stderrLogPath: snapshot.stderrLogPath
+        )
+    }
+
+    func startBridge(relayOverride _: String?) async throws {
+        try await runtimeController.start()
+    }
+
+    func stopBridge(relayOverride _: String?) async throws {
+        try await runtimeController.stop()
+    }
+
+    func resumeLastThread(relayOverride _: String?) async throws {
+        try await runtimeController.resumeThread()
+    }
+
+    func resetPairing(relayOverride _: String?) async throws {
+        try await runtimeController.resetPairing()
+    }
+
+    func updateBridgePackage() async throws {
+        throw BridgeControlError.unsupportedOperation(
+            "Bridge runtime is bundled in the app. Install a newer app build to update."
+        )
+    }
+
+    func fetchLatestPackageVersion() async -> Result<String, Error> {
+        .failure(
+            BridgeControlError.unsupportedOperation(
+                "npm package update checks are disabled for app-bundled bridge runtime."
+            )
+        )
     }
 }
 

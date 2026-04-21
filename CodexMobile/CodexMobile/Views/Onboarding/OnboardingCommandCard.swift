@@ -5,6 +5,11 @@
 // Depends on: SwiftUI, AppFont
 
 import SwiftUI
+#if os(iOS)
+import UIKit
+#elseif os(macOS)
+import AppKit
+#endif
 
 struct OnboardingCommandCard: View {
     let command: String
@@ -22,7 +27,13 @@ struct OnboardingCommandCard: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
 
             Button {
+                #if os(iOS)
                 UIPasteboard.general.string = command
+                #elseif os(macOS)
+                let pasteboard = NSPasteboard.general
+                pasteboard.clearContents()
+                pasteboard.setString(command, forType: .string)
+                #endif
                 HapticFeedback.shared.triggerImpactFeedback(style: .light)
                 withAnimation(.easeInOut(duration: 0.2)) { copied = true }
                 DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {

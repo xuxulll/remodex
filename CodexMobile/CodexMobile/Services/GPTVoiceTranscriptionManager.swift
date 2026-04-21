@@ -1,3 +1,4 @@
+#if os(iOS)
 // FILE: GPTVoiceTranscriptionManager.swift
 // Purpose: Captures microphone audio with AVAudioEngine and produces normalized 24 kHz mono WAV clips for voice transcription.
 // Layer: Service
@@ -492,3 +493,79 @@ private extension Data {
         Swift.withUnsafeBytes(of: &le) { append(contentsOf: $0) }
     }
 }
+#else
+import Combine
+import Foundation
+import SwiftUI
+
+struct GPTVoiceRecordingClip: Sendable {
+    let url: URL
+    let durationSeconds: TimeInterval
+    let byteCount: Int
+}
+
+enum GPTVoiceTranscriptionError: LocalizedError {
+    case alreadyRecording
+    case notRecording
+    case microphonePermissionDenied
+    case missingMicrophoneInput
+    case unableToConfigureAudioSession
+    case unableToPrepareAudioEngine
+    case unableToCreateOutputFile
+    case transcriptionFailed(String)
+    case authExpired
+
+    var errorDescription: String? {
+        switch self {
+        case .alreadyRecording:
+            return "Voice recording is already running."
+        case .notRecording:
+            return "Voice recording is not running."
+        case .microphonePermissionDenied:
+            return "Microphone access is required for voice transcription."
+        case .missingMicrophoneInput:
+            return "No valid microphone input is available right now."
+        case .unableToConfigureAudioSession:
+            return "Unable to configure the microphone session."
+        case .unableToPrepareAudioEngine:
+            return "Unable to prepare the microphone recorder."
+        case .unableToCreateOutputFile:
+            return "Unable to create the temporary audio file."
+        case .transcriptionFailed(let message):
+            return message
+        case .authExpired:
+            return "Your ChatGPT login has expired. Sign in again."
+        }
+    }
+}
+
+final class GPTVoiceTranscriptionManager: ObservableObject {
+    @Published var audioLevels: [CGFloat] = []
+    @Published var recordingDuration: TimeInterval = 0
+
+    @MainActor
+    func startRecording() async throws {
+        throw GPTVoiceTranscriptionError.transcriptionFailed("Voice recording is currently unavailable on macOS.")
+    }
+
+    @MainActor
+    func stopRecording() throws -> GPTVoiceRecordingClip? {
+        nil
+    }
+
+    @MainActor
+    func cancelRecording() {
+        resetMeteringState()
+    }
+
+    @MainActor
+    func resetMeteringState() {
+        audioLevels = []
+        recordingDuration = 0
+    }
+
+    static func transcribe(wavData: Data, token: String) async throws -> String {
+        throw GPTVoiceTranscriptionError.transcriptionFailed("Voice transcription is currently unavailable on macOS.")
+    }
+}
+#endif

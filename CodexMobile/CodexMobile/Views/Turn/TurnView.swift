@@ -6,7 +6,11 @@
 
 import SwiftUI
 import PhotosUI
+#if os(iOS)
 import UIKit
+#elseif os(macOS)
+import AppKit
+#endif
 
 struct TurnView: View {
     let thread: CodexThread
@@ -150,7 +154,6 @@ struct TurnView: View {
         } as (() -> Void)? : nil)
         .environment(\.inlineCommitAndPushPhase, viewModel.inlineCommitAndPushPhase)
         .navigationTitle(resolvedThread.displayTitle)
-        .navigationBarTitleDisplayMode(.inline)
         .toolbar {
             TurnToolbarContent(
                 displayTitle: resolvedThread.displayTitle,
@@ -222,12 +225,14 @@ struct TurnView: View {
                 .transition(.opacity)
             }
         }
+        #if os(iOS)
         .fullScreenCover(isPresented: isCameraPresentedBinding) {
             CameraImagePicker { data in
                 viewModel.enqueueCapturedImageData(data, codex: codex)
             }
             .ignoresSafeArea()
         }
+        #endif
         .photosPicker(
             isPresented: isPhotoPickerPresentedBinding,
             selection: photoPickerItemsBinding,
@@ -1622,10 +1627,12 @@ struct TurnView: View {
         case .showSetupHelp:
             isShowingVoiceSetupSheet = true
         case .openSystemSettings:
+            #if os(iOS)
             guard let settingsURL = URL(string: UIApplication.openSettingsURLString) else {
                 return
             }
             openURL(settingsURL)
+            #endif
         case .none:
             break
         }
@@ -1826,21 +1833,26 @@ private struct RuntimeDebugLogSheet: View {
                 }
             }
             .navigationTitle("Runtime Logs")
-            .navigationBarTitleDisplayMode(.inline)
             .toolbar {
-                ToolbarItem(placement: .topBarLeading) {
+                ToolbarItem(placement: .automatic) {
                     Button("Close") {
                         dismiss()
                     }
                 }
 
-                ToolbarItemGroup(placement: .topBarTrailing) {
+                ToolbarItemGroup(placement: .automatic) {
                     Button("Clear") {
                         codex.clearRuntimeDebugLog()
                     }
 
                     Button("Copy") {
+                        #if os(iOS)
                         UIPasteboard.general.string = combinedLogText
+                        #elseif os(macOS)
+                        let pasteboard = NSPasteboard.general
+                        pasteboard.clearContents()
+                        pasteboard.setString(combinedLogText, forType: .string)
+                        #endif
                     }
                     .disabled(combinedLogText.isEmpty)
                 }

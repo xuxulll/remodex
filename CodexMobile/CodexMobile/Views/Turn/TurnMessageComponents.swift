@@ -8,7 +8,11 @@
 
 import SwiftUI
 import Textual
+#if os(iOS)
 import UIKit
+#elseif os(macOS)
+import AppKit
+#endif
 
 // Keep Textual selection out of the scrolling timeline. This is shared by both
 // plain markdown rows and Mermaid-interleaved markdown segments.
@@ -755,7 +759,13 @@ struct MessageRow: View, Equatable {
                 if message.role == .user, !text.isEmpty {
                     Button {
                         HapticFeedback.shared.triggerImpactFeedback(style: .light)
+                        #if os(iOS)
                         UIPasteboard.general.string = text
+                        #elseif os(macOS)
+                        let pasteboard = NSPasteboard.general
+                        pasteboard.clearContents()
+                        pasteboard.setString(text, forType: .string)
+                        #endif
                     } label: {
                         Label("Copy", systemImage: "doc.on.doc")
                     }
@@ -770,12 +780,21 @@ struct MessageRow: View, Equatable {
                 }
             }
         }
+        #if os(iOS)
         .fullScreenCover(item: $previewImage) { payload in
             ZoomableImagePreviewScreen(
                 payload: payload,
                 onDismiss: { previewImage = nil }
             )
         }
+        #else
+        .sheet(item: $previewImage) { payload in
+            ZoomableImagePreviewScreen(
+                payload: payload,
+                onDismiss: { previewImage = nil }
+            )
+        }
+        #endif
     }
 
     // Renders inline @file and $skill mentions inside one AttributedString so large
@@ -1349,7 +1368,13 @@ struct MessageRow: View, Equatable {
 
             Button {
                 HapticFeedback.shared.triggerImpactFeedback(style: .light)
+                #if os(iOS)
                 UIPasteboard.general.string = trimmedText
+                #elseif os(macOS)
+                let pasteboard = NSPasteboard.general
+                pasteboard.clearContents()
+                pasteboard.setString(trimmedText, forType: .string)
+                #endif
             } label: {
                 Label("Copy", systemImage: "doc.on.doc")
             }
@@ -1400,7 +1425,6 @@ private struct SelectableMessageTextSheet: View {
                 .padding(16)
             }
             .navigationTitle(state.title)
-            .navigationBarTitleDisplayMode(.inline)
             .adaptiveNavigationBar()
             .toolbar {
                 ToolbarItem(placement: .confirmationAction) {

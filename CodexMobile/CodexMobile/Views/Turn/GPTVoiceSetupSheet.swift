@@ -62,7 +62,6 @@ struct GPTVoiceSetupSheet: View {
             .presentationDetents([.medium])
             .presentationDragIndicator(.visible)
             .navigationTitle("How GPT Voice Works")
-            .navigationBarTitleDisplayMode(.inline)
         }
     }
 

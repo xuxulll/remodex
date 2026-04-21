@@ -134,7 +134,9 @@ struct TurnWorktreeHandoffOverlay: View {
                     .foregroundStyle(.primary)
 
                 TextField("feature-name", text: $branchName)
+                    #if os(iOS)
                     .textInputAutocapitalization(.never)
+                    #endif
                     .autocorrectionDisabled()
                     .focused($isBranchNameFocused)
                     .font(AppFont.body(weight: .medium))
@@ -162,7 +164,9 @@ struct TurnWorktreeHandoffOverlay: View {
                     .foregroundStyle(.primary)
 
                 TextField("main", text: $baseBranch)
+                    #if os(iOS)
                     .textInputAutocapitalization(.never)
+                    #endif
                     .autocorrectionDisabled()
                     .font(AppFont.body(weight: .medium))
                     .padding(.horizontal, 14)

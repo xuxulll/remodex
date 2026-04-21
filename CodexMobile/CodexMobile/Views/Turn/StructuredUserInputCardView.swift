@@ -161,11 +161,15 @@ struct StructuredUserInputCardView: View {
         Group {
             if question.isSecret {
                 SecureField(question.answerFieldPlaceholder, text: binding)
+                    #if os(iOS)
                     .textInputAutocapitalization(.never)
+                    #endif
                     .autocorrectionDisabled()
             } else {
                 TextField(question.answerFieldPlaceholder, text: binding, axis: .vertical)
+                    #if os(iOS)
                     .textInputAutocapitalization(.sentences)
+                    #endif
             }
         }
         .font(AppFont.body())
