@@ -60,6 +60,13 @@ struct RemodexApp: App {
             )
         }
         .menuBarExtraStyle(.window)
+
+        Settings {
+            NavigationStack {
+                SettingsView()
+                    .environment(interactionService.codexService)
+            }
+        }
         #endif
     }
 }

@@ -299,6 +299,8 @@ struct TurnComposerInputTextView: View {
         TextEditor(text: $text)
             .font(AppFont.body())
             .disabled(!isEditable)
+            .scrollContentBackground(.hidden)
+            .background(Color.clear)
             .frame(minHeight: dynamicHeight)
     }
 }

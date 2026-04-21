@@ -295,7 +295,7 @@ private final class NativeSecureChannelService: SecureTransporting {
 }
 
 private final class NativeCodexRuntimeHost: CodexHosting {
-    private static let localAppServerListenURL = "ws://127.0.0.1:9101"
+    private static let localAppServerListenURL = "ws://127.0.0.1:9000"
     private let runner: ShellCommandRunner
     private let stateStore: NativeBridgeStateStore
     private let callbackQueue = DispatchQueue(label: "bridgecore.codex.stream", qos: .utility)
@@ -321,9 +321,11 @@ private final class NativeCodexRuntimeHost: CodexHosting {
         let stdout = try FileHandle(forWritingTo: ensureLogFile(stdoutURL))
         let stderr = try FileHandle(forWritingTo: ensureLogFile(stderrURL))
         let nextProcess = Process()
+        let launchEnvironment = buildLaunchEnvironment(codexPath: codexPath)
         nextProcess.executableURL = URL(fileURLWithPath: codexPath)
         nextProcess.arguments = ["app-server", "--listen", Self.localAppServerListenURL]
         nextProcess.currentDirectoryURL = URL(fileURLWithPath: NSHomeDirectory())
+        nextProcess.environment = launchEnvironment
         nextProcess.standardOutput = stdout
         nextProcess.standardError = stderr
         nextProcess.terminationHandler = { [weak self] _ in
@@ -422,6 +424,27 @@ private final class NativeCodexRuntimeHost: CodexHosting {
             fileManager.createFile(atPath: fileURL.path, contents: Data())
         }
         return fileURL
+    }
+
+    private func buildLaunchEnvironment(codexPath: String) -> [String: String] {
+        let defaultPathEntries = [
+            URL(fileURLWithPath: codexPath).deletingLastPathComponent().path,
+            "/opt/homebrew/bin",
+            "/usr/local/bin",
+            "/usr/bin",
+            "/bin",
+            "/usr/sbin",
+            "/sbin",
+        ]
+        let currentEnvironment = ProcessInfo.processInfo.environment
+        let existingPathEntries = currentEnvironment["PATH"]?
+            .split(separator: ":")
+            .map(String.init) ?? []
+        let pathEntries = Array(NSOrderedSet(array: defaultPathEntries + existingPathEntries)) as? [String] ?? defaultPathEntries
+
+        return currentEnvironment.merging(["PATH": pathEntries.joined(separator: ":")]) { _, override in
+            override
+        }
     }
 }
 

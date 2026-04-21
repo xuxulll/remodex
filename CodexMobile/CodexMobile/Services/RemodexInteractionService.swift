@@ -38,7 +38,7 @@ final class RemodexInteractionService {
 
 #if os(macOS)
 actor RemodexMacBridgeRuntime {
-    static let localBridgeWebSocketURL = "ws://127.0.0.1:9101"
+    static let localBridgeWebSocketURL = "ws://127.0.0.1:9000/"
 
     // Boots the native macOS bridge host so the app can connect directly as a local client.
     func startIfNeeded() async {

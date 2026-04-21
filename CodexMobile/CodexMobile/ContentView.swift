@@ -28,8 +28,6 @@ private enum RootSheetRoute: Identifiable, Equatable {
 struct ContentView: View {
     @Environment(CodexService.self) private var codex
     @Environment(\.scenePhase) private var scenePhase
-    @Environment(\.colorScheme) private var colorScheme
-    @Environment(\.horizontalSizeClass) private var horizontalSizeClass
 
     @State private var viewModel = ContentViewModel()
     @State private var isSidebarOpen = false
@@ -322,19 +320,12 @@ struct ContentView: View {
         )
     }
 
-    // Expands the drawer to the full container width on compact layouts so the sidebar
-    // can comfortably host longer titles, paths, and search results.
-    private var shouldUseFullWidthSidebar: Bool {
-        horizontalSizeClass == .compact || isSearchActive
-    }
-
     private func effectiveSidebarWidth(for availableWidth: CGFloat) -> CGFloat {
-        shouldUseFullWidthSidebar ? availableWidth : min(sidebarWidth, availableWidth)
+        min(sidebarWidth, availableWidth)
     }
 
     private var mainAppBody: some View {
-        #if os(macOS)
-        HStack(spacing: 0) {
+        NavigationSplitView {
             SidebarView(
                 selectedThread: $selectedThread,
                 showSettings: $showSettings,
@@ -346,59 +337,12 @@ struct ContentView: View {
                     openThreadFromSidebar(thread)
                 }
             )
-            .frame(width: sidebarWidth)
-
-            Divider()
-
+            .frame(minWidth: 260, idealWidth: sidebarWidth)
+        } detail: {
             mainNavigationLayer
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
-        #else
-        GeometryReader { proxy in
-            let currentSidebarWidth = effectiveSidebarWidth(for: proxy.size.width)
-            let currentSidebarRevealWidth = sidebarRevealWidth(for: currentSidebarWidth)
-
-            ZStack(alignment: .leading) {
-                if sidebarVisible || isSidebarPrewarmed {
-                    SidebarView(
-                        selectedThread: $selectedThread,
-                        showSettings: $showSettings,
-                        isSearchActive: $isSearchActive,
-                        showsInlineCloseButton: shouldUseFullWidthSidebar,
-                        isVisible: sidebarVisible,
-                        onClose: { closeSidebar() },
-                        onOpenThread: { thread in
-                            openThreadFromSidebar(thread)
-                        }
-                    )
-                    .frame(width: currentSidebarWidth)
-                    .animation(.easeInOut(duration: 0.25), value: shouldUseFullWidthSidebar)
-                }
-
-                ZStack(alignment: .leading) {
-                    mainNavigationLayer
-                        .frame(width: proxy.size.width, alignment: .leading)
-
-                    if sidebarVisible {
-                        (colorScheme == .dark ? Color.white : Color.black)
-                            .opacity(contentDimOpacity(for: currentSidebarWidth))
-                            .frame(width: proxy.size.width)
-                            .ignoresSafeArea()
-                            .allowsHitTesting(isSidebarOpen)
-                            .onTapGesture { closeSidebar() }
-                    }
-                }
-                .frame(width: proxy.size.width, alignment: .leading)
-                .clipShape(
-                    HorizontalRevealViewportShape(
-                        verticalOverflow: max(proxy.size.height, 400)
-                    )
-                )
-                .offset(x: currentSidebarRevealWidth)
-            }
-        }
-        .simultaneousGesture(edgeDragGesture)
-        #endif
+        .navigationSplitViewStyle(.balanced)
     }
 
     // MARK: - Layers
@@ -431,13 +375,6 @@ struct ContentView: View {
                     }
                 })
                 .environment(\.wakeMacDisplayAction, wakeMacDisplayRecoveryAction)
-                .toolbar {
-                    #if os(iOS)
-                    ToolbarItem(placement: .automatic) {
-                        hamburgerButton
-                    }
-                    #endif
-                }
         } else {
             HomeEmptyStateView(
                 connectionPhase: homeConnectionPhase,
@@ -476,30 +413,7 @@ struct ContentView: View {
                     reconnectFooterAction
                 }
             }
-            .toolbar {
-                #if os(iOS)
-                ToolbarItem(placement: .automatic) {
-                    hamburgerButton
-                }
-                #endif
-            }
         }
-    }
-
-    private var hamburgerButton: some View {
-        Button {
-            HapticFeedback.shared.triggerImpactFeedback(style: .light)
-            toggleSidebar()
-        } label: {
-            Image(systemName: "sidebar.leading")
-                .font(.system(size: 16, weight: .semibold))
-                .foregroundStyle(colorScheme == .dark ? Color.white : Color.black)
-                .padding(8)
-                .contentShape(Circle())
-                .adaptiveToolbarItem(in: Circle())
-        }
-        .buttonStyle(.plain)
-        .accessibilityLabel("Toggle Sidebar")
     }
 
     private var manualPairingErrorAlertIsPresented: Binding<Bool> {

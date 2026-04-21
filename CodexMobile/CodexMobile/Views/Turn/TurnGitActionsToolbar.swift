@@ -109,7 +109,10 @@ struct TurnGitActionsToolbarButton: View {
                     .controlSize(.small)
                     .frame(width: 24, height: 24)
             } else {
-                toolbarIcon(for: .commit, size: 24)
+                // Use SF Symbols for toolbar glyphs to avoid oversized SVG rendering on macOS toolbar surfaces.
+                Image(systemName: "checkmark.circle")
+                    .font(.system(size: 16, weight: .semibold))
+                    .frame(width: 24, height: 24)
                     .overlay(alignment: .topTrailing) {
                         if let syncStatusColor {
                             Circle()

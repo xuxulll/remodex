@@ -1,4 +1,3 @@
-#if os(iOS)
 // FILE: SettingsView.swift
 // Purpose: Settings for Local Mode (Codex runs on user's Mac, relay WebSocket).
 // Layer: View
@@ -8,6 +7,7 @@ import SwiftUI
 #if os(iOS)
 import UIKit
 #endif
+import UserNotifications
 
 struct SettingsView: View {
     @Environment(CodexService.self) private var codex
@@ -181,7 +181,7 @@ struct SettingsView: View {
                 .foregroundStyle(.secondary)
 
             if !codex.isConnected {
-                Text("Saved on this iPhone. It will sync to your Mac the next time the bridge reconnects.")
+                Text("Saved on this device. It will sync to your Mac the next time the bridge reconnects.")
                     .font(AppFont.caption())
                     .foregroundStyle(.secondary)
             }
@@ -471,6 +471,7 @@ private struct SettingsAppearanceCard: View {
 private struct SettingsNotificationsCard: View {
     @Environment(CodexService.self) private var codex
     @Environment(\.scenePhase) private var scenePhase
+    @Environment(\.openURL) private var openURL
 
     var body: some View {
         SettingsCard(title: "Notifications") {
@@ -497,11 +498,9 @@ private struct SettingsNotificationsCard: View {
             }
 
             if codex.notificationAuthorizationStatus == .denied {
-                SettingsButton("Open iOS Settings") {
+                SettingsButton(openSystemSettingsLabel) {
                     HapticFeedback.shared.triggerImpactFeedback()
-                    if let url = URL(string: UIApplication.openNotificationSettingsURLString) {
-                        UIApplication.shared.open(url)
-                    }
+                    openSystemNotificationSettings()
                 }
             }
         }
@@ -523,10 +522,32 @@ private struct SettingsNotificationsCard: View {
         case .authorized: "Authorized"
         case .denied: "Denied"
         case .provisional: "Provisional"
+        #if os(iOS)
         case .ephemeral: "Ephemeral"
+        #endif
         case .notDetermined: "Not requested"
         @unknown default: "Unknown"
         }
+    }
+
+    private var openSystemSettingsLabel: String {
+        #if os(iOS)
+        return "Open iOS Settings"
+        #else
+        return "Open System Settings"
+        #endif
+    }
+
+    private func openSystemNotificationSettings() {
+        #if os(iOS)
+        if let url = URL(string: UIApplication.openNotificationSettingsURLString) {
+            UIApplication.shared.open(url)
+        }
+        #elseif os(macOS)
+        if let url = URL(string: "x-apple.systempreferences:com.apple.Notifications-Settings.extension") {
+            openURL(url)
+        }
+        #endif
     }
 }
 
@@ -736,6 +757,7 @@ private struct SettingsArchivedChatsCard: View {
 }
 
 private struct SettingsAboutCard: View {
+    @Environment(\.openURL) private var openURL
     @State private var isShowingAbout = false
 
     var body: some View {
@@ -761,7 +783,7 @@ private struct SettingsAboutCard: View {
             Button {
                 HapticFeedback.shared.triggerImpactFeedback(style: .light)
                 if let url = URL(string: "https://x.com/emanueledpt") {
-                    UIApplication.shared.open(url)
+                    openURL(url)
                 }
             } label: {
                 settingsAccessoryRow(
@@ -779,7 +801,7 @@ private struct SettingsAboutCard: View {
 
             Button {
                 HapticFeedback.shared.triggerImpactFeedback(style: .light)
-                UIApplication.shared.open(AppEnvironment.privacyPolicyURL)
+                openURL(AppEnvironment.privacyPolicyURL)
             } label: {
                 settingsAccessoryRow(
                     title: "Privacy Policy",
@@ -793,7 +815,7 @@ private struct SettingsAboutCard: View {
 
             Button {
                 HapticFeedback.shared.triggerImpactFeedback(style: .light)
-                UIApplication.shared.open(AppEnvironment.termsOfUseURL)
+                openURL(AppEnvironment.termsOfUseURL)
             } label: {
                 settingsAccessoryRow(
                     title: "Terms of Use",
@@ -805,7 +827,7 @@ private struct SettingsAboutCard: View {
             }
             .buttonStyle(.plain)
         }
-        .fullScreenCover(isPresented: $isShowingAbout) {
+        .sheet(isPresented: $isShowingAbout) {
             AboutRemodexView()
         }
     }
@@ -970,8 +992,10 @@ private struct SettingsMacNameSheet: View {
                 }
 
                 TextField(systemName, text: $draftNickname)
+                    #if os(iOS)
                     .textInputAutocapitalization(.words)
                     .disableAutocorrection(true)
+                    #endif
                     .font(AppFont.subheadline())
                     .padding(.horizontal, 12)
                     .padding(.vertical, 11)
@@ -980,7 +1004,7 @@ private struct SettingsMacNameSheet: View {
                             .fill(Color(.secondarySystemFill))
                     )
 
-                Text("This nickname stays on this iPhone and appears anywhere this Mac is shown.")
+                Text("This nickname stays on this device and appears anywhere this Mac is shown.")
                     .font(AppFont.caption())
                     .foregroundStyle(.secondary)
 
@@ -1006,7 +1030,9 @@ private struct SettingsMacNameSheet: View {
             .presentationDetents([.height(300)])
             .presentationDragIndicator(.visible)
             .navigationTitle("Edit Mac Name")
+            #if os(iOS)
             .navigationBarTitleDisplayMode(.inline)
+            #endif
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Close") {
@@ -1035,26 +1061,3 @@ private struct SettingsMacNameSheet: View {
             .environment(CodexService())
     }
 }
-#else
-import SwiftUI
-
-struct SettingsView: View {
-    @Environment(CodexService.self) private var codex
-
-    var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 16) {
-                Text("Settings")
-                    .font(AppFont.title3(weight: .semibold))
-                Text("macOS settings controls are being unified with iOS in this refactor.")
-                    .font(AppFont.body())
-                    .foregroundStyle(.secondary)
-                Text("Connected: \(codex.isConnected ? "Yes" : "No")")
-                    .font(AppFont.subheadline())
-            }
-            .padding()
-        }
-        .navigationTitle("Settings")
-    }
-}
-#endif

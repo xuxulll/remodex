@@ -14,6 +14,7 @@ struct ContextWindowProgressRing: View {
     let shouldAutoRefreshStatus: Bool
     let onRefreshStatus: (() async -> Void)?
     @State private var isShowingPopover = false
+    @State private var isShowingStatusSheet = false
     @State private var isRefreshing = false
 
     private let ringSize: CGFloat = 18
@@ -23,7 +24,11 @@ struct ContextWindowProgressRing: View {
     var body: some View {
         Button {
             HapticFeedback.shared.triggerImpactFeedback(style: .light)
+            #if os(macOS)
+            isShowingStatusSheet = true
+            #else
             isShowingPopover = true
+            #endif
         } label: {
             ZStack {
                 Circle()
@@ -53,11 +58,32 @@ struct ContextWindowProgressRing: View {
         .buttonStyle(.plain)
         .accessibilityLabel("Context window")
         .accessibilityValue(usageAccessibilityValue)
+        #if os(macOS)
+        .sheet(isPresented: $isShowingStatusSheet) {
+            NavigationStack {
+                popoverContent
+                    .navigationTitle("Usage")
+                    .toolbar {
+                        ToolbarItem(placement: .confirmationAction) {
+                            Button("Done") {
+                                isShowingStatusSheet = false
+                            }
+                        }
+                    }
+            }
+            .frame(minWidth: 360, minHeight: 300)
+        }
+        #else
         .popover(isPresented: $isShowingPopover) {
             popoverContent
                 .presentationCompactAdaptation(.popover)
         }
+        #endif
         .onChange(of: isShowingPopover) { _, isPresented in
+            guard isPresented, shouldAutoRefreshStatus else { return }
+            refreshStatus(triggerHaptic: false)
+        }
+        .onChange(of: isShowingStatusSheet) { _, isPresented in
             guard isPresented, shouldAutoRefreshStatus else { return }
             refreshStatus(triggerHaptic: false)
         }

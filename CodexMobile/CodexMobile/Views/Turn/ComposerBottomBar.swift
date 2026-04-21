@@ -39,21 +39,20 @@ struct ComposerBottomBar: View {
     private var metaTextFont: Font { AppFont.subheadline() }
     private var metaSymbolFont: Font { AppFont.system(size: 11, weight: .regular) }
     private let metaSymbolSize: CGFloat = 12
-    private let brainSymbolSize: CGFloat = 8
     private let reasoningSymbolName = "brain"
-    private let reasoningSymbolIsAsset = true
+    private let reasoningSymbolIsAsset = false
     private var metaChevronFont: Font { AppFont.system(size: 9, weight: .regular) }
     private let metaVerticalPadding: CGFloat = 6
     private let plusTapTargetSide: CGFloat = 22
 
     private var sendButtonIconColor: Color {
-        if isSendDisabled { return Color(.systemGray2) }
-        return Color(.systemBackground)
+        if isSendDisabled { return Color(.systemGray) }
+        return .white
     }
 
     private var sendButtonBackgroundColor: Color {
-        if isSendDisabled { return Color(.systemGray5) }
-        return Color(.label)
+        if isSendDisabled { return Color(.systemGray4) }
+        return Color.accentColor
     }
 
     // MARK: - Body
@@ -81,6 +80,7 @@ struct ComposerBottomBar: View {
                         .frame(width: 28, height: 28)
                         .background(Color(.systemGray2), in: Circle())
                 }
+                .buttonStyle(.plain)
                 .accessibilityLabel("Resume queued messages")
             }
 
@@ -105,6 +105,7 @@ struct ComposerBottomBar: View {
                         .frame(width: 32, height: 32)
                         .background(Color(.label), in: Circle())
                 }
+                .buttonStyle(.plain)
             }
 
             Button {
@@ -116,6 +117,10 @@ struct ComposerBottomBar: View {
                     .foregroundStyle(sendButtonIconColor)
                     .frame(width: 32, height: 32)
                     .background(sendButtonBackgroundColor, in: Circle())
+                    .overlay {
+                        Circle()
+                            .stroke(Color.white.opacity(isSendDisabled ? 0.12 : 0.35), lineWidth: 1)
+                    }
             }
             .overlay(alignment: .topTrailing) {
                 if queuedCount > 0 {
@@ -123,6 +128,7 @@ struct ComposerBottomBar: View {
                         .offset(x: 8, y: -8)
                 }
             }
+            .buttonStyle(.plain)
             .disabled(isSendDisabled)
         }
         .padding(.horizontal, 16)
