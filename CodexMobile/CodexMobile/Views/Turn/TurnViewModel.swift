@@ -1729,7 +1729,34 @@ final class TurnViewModel {
         }
 
         _ = await codex.refreshInFlightTurnState(threadId: threadID)
-        return isThreadBusy(codex: codex, threadID: threadID)
+        if !isThreadBusy(codex: codex, threadID: threadID) {
+            return false
+        }
+
+        // If the visible running state has no resolvable in-flight turn, clear stale flags so
+        // a new send is not stuck in queued mode forever after reconnect/mirror drift.
+        do {
+            let resolvedTurnID = try await codex.resolveInFlightTurnID(threadId: threadID)
+            if let resolvedTurnID {
+                codex.setActiveTurnID(resolvedTurnID, for: threadID)
+                codex.threadIdByTurnID[resolvedTurnID] = threadID
+                return true
+            }
+            codex.clearRunningState(for: threadID)
+            return false
+        } catch {
+            guard shouldTreatAsMissingRollout(error) else {
+                return isThreadBusy(codex: codex, threadID: threadID)
+            }
+            codex.clearRunningState(for: threadID)
+            return false
+        }
+    }
+
+    private func shouldTreatAsMissingRollout(_ error: Error) -> Bool {
+        let message = error.localizedDescription.lowercased()
+        return message.contains("no rollout found")
+            || message.contains("no rollout file found")
     }
 
     private func isThreadBusy(codex: CodexService, threadID: String) -> Bool {

@@ -426,6 +426,13 @@ struct SettingsView: View {
                     guard isLikelyDirectSessionCode(code) else {
                         throw error
                     }
+                    guard isLikelyDirectAppServerEndpoint(relayURL) else {
+                        throw CodexSecureTransportError.invalidQR(
+                            "This looks like a relay endpoint. Use the target Mac bridge app-server "
+                                + "address:port (for LAN usually `ws://<mac-lan-ip>:9010`) or a relay "
+                                + "that supports pairing-code resolve."
+                        )
+                    }
                     let directRelayURL = normalizedDirectAppServerRelayURL(from: relayURL)
                     pairingPayload = CodexPairingQRPayload(
                         v: codexPairingQRVersion,
@@ -509,6 +516,21 @@ struct SettingsView: View {
         components.query = nil
         components.fragment = nil
         return components.string ?? relayURL
+    }
+
+    private func isLikelyDirectAppServerEndpoint(_ relayURL: String) -> Bool {
+        guard let components = URLComponents(string: relayURL) else {
+            return false
+        }
+
+        let normalizedPath = components.path
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .lowercased()
+        if normalizedPath.isEmpty || normalizedPath == "/" {
+            return components.port != 9000
+        }
+
+        return !normalizedPath.hasSuffix("/relay")
     }
     #endif
 
