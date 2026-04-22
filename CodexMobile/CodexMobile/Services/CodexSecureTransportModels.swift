@@ -14,10 +14,22 @@ let codexSecureHandshakeLabel = "client-auth"
 let codexSecureClockSkewToleranceSeconds: TimeInterval = 60
 let codexTrustedSessionResolveTag = "remodex-trusted-session-resolve-v1"
 let codexTrustedSessionResolveClockSkewToleranceSeconds: TimeInterval = 90
+let codexClientRegisterTag = "remodex-relay-client-register-v1"
 
 enum CodexSecureHandshakeMode: String, Codable, Sendable {
     case qrBootstrap = "qr_bootstrap"
     case trustedReconnect = "trusted_reconnect"
+}
+
+enum CodexSecureClientType: String, Codable, Sendable {
+    case iphone
+    case ipad
+    case desktop
+}
+
+enum CodexRelayTransportMode: String, Codable, Sendable {
+    case secureRelay = "secure_relay"
+    case directAppServer = "direct_app_server"
 }
 
 enum CodexSecureConnectionState: Equatable, Sendable {
@@ -31,13 +43,14 @@ enum CodexSecureConnectionState: Equatable, Sendable {
     case updateRequired
 }
 
-struct CodexPairingQRPayload: Codable, Sendable {
+struct CodexPairingQRPayload: Codable, Equatable, Sendable {
     let v: Int
     let relay: String
     let sessionId: String
     let macDeviceId: String
     let macIdentityPublicKey: String
     let expiresAt: Int64
+    let transport: CodexRelayTransportMode?
 }
 
 struct CodexPhoneIdentityState: Codable, Sendable {
@@ -97,6 +110,17 @@ struct SecureClientAuth: Codable, Sendable {
     let phoneSignature: String
 }
 
+struct SecureClientRegister: Codable, Sendable {
+    let kind = "clientRegister"
+    let sessionId: String
+    let clientDeviceId: String
+    let clientIdentityPublicKey: String
+    let clientType: CodexSecureClientType
+    let timestamp: Int64
+    let nonce: String
+    let signature: String
+}
+
 struct SecureReadyMessage: Codable, Sendable {
     let kind: String
     let sessionId: String
@@ -108,6 +132,7 @@ struct SecureResumeState: Codable, Sendable {
     let kind = "resumeState"
     let sessionId: String
     let keyEpoch: Int
+    let clientDeviceId: String
     let lastAppliedBridgeOutboundSeq: Int
 }
 
@@ -124,6 +149,8 @@ struct SecureEnvelope: Codable, Sendable {
     let keyEpoch: Int
     let sender: String
     let counter: Int
+    let clientDeviceId: String?
+    let targetClientDeviceId: String?
     let ciphertext: String
     let tag: String
 }
@@ -149,6 +176,8 @@ struct CodexTrustedSessionResolveRequest: Codable, Sendable {
     let macDeviceId: String
     let phoneDeviceId: String
     let phoneIdentityPublicKey: String
+    let clientDeviceId: String?
+    let clientIdentityPublicKey: String?
     let nonce: String
     let timestamp: Int64
     let signature: String
@@ -264,6 +293,23 @@ func codexTrustedSessionResolveTranscriptBytes(
     data.appendLengthPrefixedUTF8(macDeviceId)
     data.appendLengthPrefixedUTF8(phoneDeviceId)
     data.appendLengthPrefixedData(Data(base64EncodedOrEmpty: phoneIdentityPublicKey))
+    data.appendLengthPrefixedUTF8(nonce)
+    data.appendLengthPrefixedUTF8(String(timestamp))
+    return data
+}
+
+func codexClientRegisterTranscriptBytes(
+    sessionId: String,
+    clientDeviceId: String,
+    clientIdentityPublicKey: String,
+    nonce: String,
+    timestamp: Int64
+) -> Data {
+    var data = Data()
+    data.appendLengthPrefixedUTF8(codexClientRegisterTag)
+    data.appendLengthPrefixedUTF8(sessionId)
+    data.appendLengthPrefixedUTF8(clientDeviceId)
+    data.appendLengthPrefixedData(Data(base64EncodedOrEmpty: clientIdentityPublicKey))
     data.appendLengthPrefixedUTF8(nonce)
     data.appendLengthPrefixedUTF8(String(timestamp))
     return data

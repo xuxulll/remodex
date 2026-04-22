@@ -81,7 +81,7 @@ function resolveBridgeRelaySession(state, { persist = true } = {}) {
   };
 }
 
-// Persists the trusted iPhone identity so reconnects can be authenticated during the current pairing flow.
+// Persists a trusted client-device identity so reconnects can be authenticated during pairing flows.
 function rememberTrustedPhone(state, phoneDeviceId, phoneIdentityPublicKey, { persist = true } = {}) {
   const normalizedDeviceId = normalizeNonEmptyString(phoneDeviceId);
   const normalizedPublicKey = normalizeNonEmptyString(phoneIdentityPublicKey);
@@ -89,10 +89,13 @@ function rememberTrustedPhone(state, phoneDeviceId, phoneIdentityPublicKey, { pe
     return state;
   }
 
-  // Remodex supports one trusted iPhone per Mac, so a new trust record replaces old ones.
+  // Keep the legacy `trustedPhones` shape for compatibility, but treat it as an allowlist map.
   const nextState = normalizeBridgeDeviceState({
     ...state,
     trustedPhones: {
+      ...(state?.trustedPhones && typeof state.trustedPhones === "object"
+        ? state.trustedPhones
+        : {}),
       [normalizedDeviceId]: normalizedPublicKey,
     },
   });

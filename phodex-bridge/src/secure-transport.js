@@ -40,12 +40,10 @@ function createBridgeSecureTransport({
   onTrustedPhoneUpdate = null,
 }) {
   let currentDeviceState = deviceState;
-  let pendingHandshake = null;
-  let activeSession = null;
+  const pendingHandshakesById = new Map();
+  const activeSessionsByKeyEpoch = new Map();
+  const activeSessionsByPhoneDeviceId = new Map();
   let liveSendWireMessage = null;
-  // Tracks the highest bridge seq the phone has definitely acked, so replay
-  // decisions never depend on best-effort local socket writes.
-  let lastRelayedBridgeOutboundSeq = 0;
   let currentPairingExpiresAt = Date.now() + MAX_PAIRING_AGE_MS;
   let nextKeyEpoch = 1;
   let nextBridgeOutboundSeq = 1;
@@ -115,17 +113,24 @@ function createBridgeSecureTransport({
     outboundBufferBytes += bufferEntry.sizeBytes;
     trimOutboundBuffer();
 
-    const liveSessionSender = activeSession?.sendWireMessage;
-    const effectiveSendWireMessage = typeof liveSessionSender === "function"
-      ? liveSessionSender
-      : sendWireMessage;
-    if (activeSession?.isResumed && typeof effectiveSendWireMessage === "function") {
-      sendBufferedEntry(bufferEntry, effectiveSendWireMessage);
+    for (const activeSession of activeSessionsByKeyEpoch.values()) {
+      const liveSessionSender = activeSession?.sendWireMessage;
+      const effectiveSendWireMessage = typeof liveSessionSender === "function"
+        ? liveSessionSender
+        : sendWireMessage;
+      if (activeSession?.isResumed && typeof effectiveSendWireMessage === "function") {
+        sendBufferedEntry(activeSession, bufferEntry, effectiveSendWireMessage);
+      }
     }
   }
 
   function isSecureChannelReady() {
-    return Boolean(activeSession?.isResumed);
+    for (const activeSession of activeSessionsByKeyEpoch.values()) {
+      if (activeSession?.isResumed) {
+        return true;
+      }
+    }
+    return false;
   }
 
   function handleClientHello(message, sendControlMessage) {
@@ -232,7 +237,7 @@ function createBridgeSecureTransport({
       + `transcript=${transcriptDigest(transcriptBytes)}`
     );
 
-    pendingHandshake = {
+    const pendingHandshake = {
       sessionId,
       handshakeMode,
       keyEpoch,
@@ -244,7 +249,7 @@ function createBridgeSecureTransport({
       transcriptBytes,
       expiresAtForTranscript,
     };
-    activeSession = null;
+    pendingHandshakesById.set(pendingHandshakeId(phoneDeviceId, keyEpoch), pendingHandshake);
 
     sendControlMessage({
       kind: "serverHello",
@@ -263,6 +268,11 @@ function createBridgeSecureTransport({
   }
 
   function handleClientAuth(message, sendControlMessage) {
+    const incomingSessionId = normalizeNonEmptyString(message.sessionId);
+    const phoneDeviceId = normalizeNonEmptyString(message.phoneDeviceId);
+    const keyEpoch = Number(message.keyEpoch);
+    const phoneSignature = normalizeNonEmptyString(message.phoneSignature);
+    const pendingHandshake = pendingHandshakesById.get(pendingHandshakeId(phoneDeviceId, keyEpoch));
     if (!pendingHandshake) {
       sendControlMessage(createSecureError({
         code: "unexpected_client_auth",
@@ -270,18 +280,13 @@ function createBridgeSecureTransport({
       }));
       return;
     }
-
-    const incomingSessionId = normalizeNonEmptyString(message.sessionId);
-    const phoneDeviceId = normalizeNonEmptyString(message.phoneDeviceId);
-    const keyEpoch = Number(message.keyEpoch);
-    const phoneSignature = normalizeNonEmptyString(message.phoneSignature);
     if (
       incomingSessionId !== pendingHandshake.sessionId
       || phoneDeviceId !== pendingHandshake.phoneDeviceId
       || keyEpoch !== pendingHandshake.keyEpoch
       || !phoneSignature
     ) {
-      pendingHandshake = null;
+      pendingHandshakesById.delete(pendingHandshakeId(phoneDeviceId, keyEpoch));
       sendControlMessage(createSecureError({
         code: "invalid_client_auth",
         message: "The secure client authentication payload was invalid.",
@@ -299,7 +304,7 @@ function createBridgeSecureTransport({
       phoneSignature
     );
     if (!phoneVerified) {
-      pendingHandshake = null;
+      pendingHandshakesById.delete(pendingHandshakeId(phoneDeviceId, keyEpoch));
       sendControlMessage(createSecureError({
         code: "invalid_phone_signature",
         message: "The iPhone secure signature could not be verified.",
@@ -335,7 +340,7 @@ function createBridgeSecureTransport({
       String(pendingHandshake.keyEpoch),
     ].join("|");
 
-    activeSession = {
+    const activeSession = {
       sessionId: pendingHandshake.sessionId,
       keyEpoch: pendingHandshake.keyEpoch,
       phoneDeviceId: pendingHandshake.phoneDeviceId,
@@ -346,7 +351,10 @@ function createBridgeSecureTransport({
       nextOutboundCounter: 0,
       isResumed: false,
       sendWireMessage: liveSendWireMessage,
+      lastRelayedBridgeOutboundSeq: 0,
     };
+    activeSessionsByKeyEpoch.set(activeSession.keyEpoch, activeSession);
+    activeSessionsByPhoneDeviceId.set(activeSession.phoneDeviceId, activeSession);
 
     nextKeyEpoch = pendingHandshake.keyEpoch + 1;
     if (
@@ -367,11 +375,14 @@ function createBridgeSecureTransport({
         onTrustedPhoneUpdate?.(currentDeviceState);
       }
     }
-    if (pendingHandshake.handshakeMode === HANDSHAKE_MODE_QR_BOOTSTRAP) {
+    if (
+      pendingHandshake.handshakeMode === HANDSHAKE_MODE_QR_BOOTSTRAP
+      && activeSessionsByPhoneDeviceId.size <= 1
+    ) {
       resetOutboundReplayState();
     }
 
-    pendingHandshake = null;
+    pendingHandshakesById.delete(pendingHandshakeId(phoneDeviceId, keyEpoch));
     sendControlMessage({
       kind: "secureReady",
       sessionId,
@@ -381,28 +392,37 @@ function createBridgeSecureTransport({
   }
 
   function handleResumeState(message) {
-    if (!activeSession) {
-      return;
-    }
-
     const incomingSessionId = normalizeNonEmptyString(message.sessionId);
     const keyEpoch = Number(message.keyEpoch);
-    if (incomingSessionId !== sessionId || keyEpoch !== activeSession.keyEpoch) {
+    const clientDeviceId = normalizeNonEmptyString(message.clientDeviceId);
+    const activeSession = activeSessionsByKeyEpoch.get(keyEpoch)
+      || activeSessionsByPhoneDeviceId.get(clientDeviceId);
+    if (
+      !activeSession
+      || incomingSessionId !== sessionId
+      || keyEpoch !== activeSession.keyEpoch
+      || (clientDeviceId && clientDeviceId !== activeSession.phoneDeviceId)
+    ) {
       return;
     }
 
     const lastAppliedBridgeOutboundSeq = Number(message.lastAppliedBridgeOutboundSeq) || 0;
-    lastRelayedBridgeOutboundSeq = lastAppliedBridgeOutboundSeq;
+    activeSession.lastRelayedBridgeOutboundSeq = lastAppliedBridgeOutboundSeq;
     const missingEntries = replayableOutboundEntries(lastAppliedBridgeOutboundSeq);
     activeSession.isResumed = true;
     for (const entry of missingEntries) {
-      if (!sendBufferedEntry(entry, activeSession.sendWireMessage)) {
+      if (!sendBufferedEntry(activeSession, entry, activeSession.sendWireMessage)) {
         break;
       }
     }
   }
 
   function handleEncryptedEnvelope(message, sendControlMessage, onApplicationMessage) {
+    const incomingSessionId = normalizeNonEmptyString(message.sessionId);
+    const keyEpoch = Number(message.keyEpoch);
+    const clientDeviceId = normalizeNonEmptyString(message.clientDeviceId);
+    const activeSession = activeSessionsByKeyEpoch.get(keyEpoch)
+      || activeSessionsByPhoneDeviceId.get(clientDeviceId);
     if (!activeSession) {
       sendControlMessage(createSecureError({
         code: "secure_channel_unavailable",
@@ -411,13 +431,12 @@ function createBridgeSecureTransport({
       return true;
     }
 
-    const incomingSessionId = normalizeNonEmptyString(message.sessionId);
-    const keyEpoch = Number(message.keyEpoch);
     const sender = normalizeNonEmptyString(message.sender);
     const counter = Number(message.counter);
     if (
       incomingSessionId !== sessionId
       || keyEpoch !== activeSession.keyEpoch
+      || (clientDeviceId && clientDeviceId !== activeSession.phoneDeviceId)
       || sender !== SECURE_SENDER_IPHONE
       || !Number.isInteger(counter)
       || counter <= activeSession.lastInboundCounter
@@ -455,9 +474,9 @@ function createBridgeSecureTransport({
 
   function bindLiveSendWireMessage(sendWireMessage) {
     liveSendWireMessage = sendWireMessage;
-    if (activeSession) {
+    for (const activeSession of activeSessionsByKeyEpoch.values()) {
       activeSession.sendWireMessage = sendWireMessage;
-      replayBufferedOutboundMessages();
+      replayBufferedOutboundMessages(activeSession);
     }
   }
 
@@ -478,11 +497,13 @@ function createBridgeSecureTransport({
   function resetOutboundReplayState() {
     outboundBuffer.length = 0;
     outboundBufferBytes = 0;
-    lastRelayedBridgeOutboundSeq = 0;
+    for (const activeSession of activeSessionsByKeyEpoch.values()) {
+      activeSession.lastRelayedBridgeOutboundSeq = 0;
+    }
     nextBridgeOutboundSeq = 1;
   }
 
-  function sendBufferedEntry(entry, sendWireMessage) {
+  function sendBufferedEntry(activeSession, entry, sendWireMessage) {
     if (!activeSession?.isResumed || typeof sendWireMessage !== "function") {
       return false;
     }
@@ -496,7 +517,8 @@ function createBridgeSecureTransport({
       SECURE_SENDER_MAC,
       activeSession.nextOutboundCounter,
       sessionId,
-      activeSession.keyEpoch
+      activeSession.keyEpoch,
+      activeSession.phoneDeviceId
     );
     activeSession.nextOutboundCounter += 1;
     return sendWireMessage(JSON.stringify(envelope)) !== false;
@@ -510,16 +532,28 @@ function createBridgeSecureTransport({
 
   // Replays from the last phone ack instead of local socket writes, so a relay
   // flap cannot make the bridge skip output the phone never actually received.
-  function replayBufferedOutboundMessages() {
+  function replayBufferedOutboundMessages(activeSession) {
     if (!activeSession?.isResumed || typeof activeSession.sendWireMessage !== "function") {
       return;
     }
 
-    for (const entry of replayableOutboundEntries(lastRelayedBridgeOutboundSeq)) {
-      if (!sendBufferedEntry(entry, activeSession.sendWireMessage)) {
+    for (const entry of replayableOutboundEntries(activeSession.lastRelayedBridgeOutboundSeq)) {
+      if (!sendBufferedEntry(activeSession, entry, activeSession.sendWireMessage)) {
         break;
       }
     }
+  }
+
+  function currentClientSessions() {
+    return Array.from(activeSessionsByPhoneDeviceId.values())
+      .map((session) => ({
+        clientDeviceId: session.phoneDeviceId,
+        keyEpoch: session.keyEpoch,
+        isResumed: Boolean(session.isResumed),
+        lastInboundCounter: session.lastInboundCounter,
+        nextOutboundCounter: session.nextOutboundCounter,
+      }))
+      .sort((left, right) => left.clientDeviceId.localeCompare(right.clientDeviceId));
   }
 
   return {
@@ -529,6 +563,7 @@ function createBridgeSecureTransport({
     createPairingPayload,
     handleIncomingWireMessage,
     isSecureChannelReady,
+    currentClientSessions,
     queueOutboundApplicationMessage,
   };
 }
@@ -554,7 +589,19 @@ function transcriptDigest(transcriptBytes) {
   return createHash("sha256").update(transcriptBytes).digest("hex").slice(0, 16);
 }
 
-function encryptEnvelopePayload(payloadObject, key, sender, counter, sessionId, keyEpoch) {
+function pendingHandshakeId(phoneDeviceId, keyEpoch) {
+  return `${normalizeNonEmptyString(phoneDeviceId)}|${Number(keyEpoch)}`;
+}
+
+function encryptEnvelopePayload(
+  payloadObject,
+  key,
+  sender,
+  counter,
+  sessionId,
+  keyEpoch,
+  clientDeviceId = ""
+) {
   const nonce = nonceForDirection(sender, counter);
   const cipher = createCipheriv("aes-256-gcm", key, nonce);
   const ciphertext = Buffer.concat([
@@ -570,6 +617,10 @@ function encryptEnvelopePayload(payloadObject, key, sender, counter, sessionId, 
     keyEpoch,
     sender,
     counter,
+    clientDeviceId: normalizeNonEmptyString(clientDeviceId) || undefined,
+    targetClientDeviceId: sender === SECURE_SENDER_MAC
+      ? (normalizeNonEmptyString(clientDeviceId) || undefined)
+      : undefined,
     ciphertext: ciphertext.toString("base64"),
     tag: tag.toString("base64"),
   };

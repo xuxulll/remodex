@@ -147,8 +147,15 @@ final class DesktopHandoffService {
 
     // Rebuilds the last saved session URL so offline wake can use a temporary bridge connection.
     private var savedReconnectURL: String? {
-        guard let sessionId = codex.normalizedRelaySessionId,
-              let relayURL = codex.normalizedRelayURL else {
+        guard let relayURL = codex.normalizedRelayURL else {
+            return nil
+        }
+
+        if codex.shouldUseDirectRelayTransport {
+            return relayURL
+        }
+
+        guard let sessionId = codex.normalizedRelaySessionId else {
             return nil
         }
 
@@ -157,6 +164,10 @@ final class DesktopHandoffService {
 
     // Prefers a freshly resolved trusted session so display wake still works when the saved live session is gone.
     private func preferredReconnectURLForWake() async throws -> String? {
+        if codex.shouldUseDirectRelayTransport {
+            return savedReconnectURL
+        }
+
         if codex.hasTrustedMacReconnectCandidate {
             do {
                 let resolved = try await codex.resolveTrustedMacSession()

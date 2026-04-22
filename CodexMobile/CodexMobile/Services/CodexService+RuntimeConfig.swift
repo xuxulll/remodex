@@ -174,6 +174,11 @@ extension CodexService {
         persistRuntimeSelections()
     }
 
+    func setMacConnectionTarget(_ target: CodexMacConnectionTarget) {
+        macConnectionTarget = target
+        defaults.set(target.rawValue, forKey: Self.macConnectionTargetDefaultsKey)
+    }
+
     func selectedModelOption() -> CodexModelOption? {
         selectedModelOption(from: availableModels)
     }

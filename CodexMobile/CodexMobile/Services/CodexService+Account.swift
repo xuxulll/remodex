@@ -132,6 +132,25 @@ struct CodexGPTLoginStartResult: Equatable, Sendable {
     let expiresAt: Date?
 }
 
+struct CodexBridgeConnectedClient: Equatable, Sendable {
+    let clientDeviceId: String
+    let keyEpoch: Int
+    let isResumed: Bool
+}
+
+struct CodexBridgeSettingsSnapshot: Equatable, Sendable {
+    let relayURL: String?
+    let relaySessionId: String?
+    let pairingPayload: CodexPairingQRPayload?
+    let pairingCode: String?
+    let bridgeState: String?
+    let bridgeConnectionStatus: String?
+    let pairedClientDeviceIds: [String]
+    let currentClients: [CodexBridgeConnectedClient]
+    let connectedClientCount: Int
+    let secureChannelReady: Bool
+}
+
 extension CodexService {
     static let legacyGPTLoginCallbackEnabled = true
 
@@ -185,6 +204,55 @@ extension CodexService {
             )
         } catch {
             // Keep the last-known bridge version info when the status read fails transiently.
+        }
+    }
+
+    // Refreshes bridge-only settings metadata (pairing QR payload, remote endpoint, and connected clients).
+    func refreshBridgeSettingsSnapshot() async {
+        #if os(macOS)
+        if !isConnected && !isLocalMacBridgeTargetActive {
+            bridgeSettingsSnapshot = nil
+            bridgeSettingsErrorMessage = nil
+            return
+        }
+        #else
+        guard isConnected else {
+            bridgeSettingsSnapshot = nil
+            bridgeSettingsErrorMessage = nil
+            return
+        }
+        #endif
+
+        isLoadingBridgeSettingsSnapshot = true
+        defer { isLoadingBridgeSettingsSnapshot = false }
+
+        #if os(macOS)
+        if isLocalMacBridgeTargetActive {
+            await refreshLocalBridgeSettingsSnapshot()
+            return
+        }
+        #endif
+
+        if !supportsBridgeSettingsRead {
+            bridgeSettingsSnapshot = legacyBridgeSettingsSnapshot()
+            bridgeSettingsErrorMessage = unsupportedBridgeSettingsMessage()
+            return
+        }
+
+        do {
+            let response = try await sendRequest(method: "bridge/settings/read", params: nil)
+            guard let payloadObject = response.result?.objectValue else {
+                throw CodexServiceError.invalidResponse("bridge settings response missing payload")
+            }
+            bridgeSettingsSnapshot = decodeBridgeSettingsSnapshot(from: payloadObject)
+            bridgeSettingsErrorMessage = nil
+        } catch {
+            if consumeUnsupportedBridgeSettingsRead(error) {
+                bridgeSettingsSnapshot = legacyBridgeSettingsSnapshot()
+                bridgeSettingsErrorMessage = unsupportedBridgeSettingsMessage()
+                return
+            }
+            bridgeSettingsErrorMessage = error.localizedDescription
         }
     }
 
@@ -921,6 +989,227 @@ extension CodexService {
         )
     }
 
+    private func decodeBridgeSettingsSnapshot(from payloadObject: IncomingParamsObject) -> CodexBridgeSettingsSnapshot {
+        let pairingPayloadObject = firstObjectValue(
+            in: payloadObject,
+            keys: ["pairingPayload", "pairing_payload"]
+        )
+        let pairingPayload = decodeBridgePairingPayload(from: pairingPayloadObject)
+
+        let rawClients = firstArrayValue(
+            in: payloadObject,
+            keys: ["currentClients", "current_clients"]
+        ) ?? []
+        let clients = rawClients.compactMap { clientValue -> CodexBridgeConnectedClient? in
+            guard let clientObject = clientValue.objectValue,
+                  let clientDeviceId = firstStringValue(in: clientObject, keys: ["clientDeviceId", "client_device_id"]),
+                  let keyEpoch = firstIntValue(in: clientObject, keys: ["keyEpoch", "key_epoch"]) else {
+                return nil
+            }
+            let isResumed = firstBoolValue(in: clientObject, keys: ["isResumed", "is_resumed"]) ?? false
+            return CodexBridgeConnectedClient(
+                clientDeviceId: clientDeviceId,
+                keyEpoch: keyEpoch,
+                isResumed: isResumed
+            )
+        }
+
+        return CodexBridgeSettingsSnapshot(
+            relayURL: firstStringValue(in: payloadObject, keys: ["relayUrl", "relay_url"]),
+            relaySessionId: firstStringValue(in: payloadObject, keys: ["relaySessionId", "relay_session_id"]),
+            pairingPayload: pairingPayload,
+            pairingCode: firstStringValue(in: payloadObject, keys: ["pairingCode", "pairing_code"]),
+            bridgeState: firstStringValue(in: payloadObject, keys: ["bridgeState", "bridge_state"]),
+            bridgeConnectionStatus: firstStringValue(
+                in: payloadObject,
+                keys: ["bridgeConnectionStatus", "bridge_connection_status"]
+            ),
+            pairedClientDeviceIds: decodeBridgePairedClientDeviceIds(from: payloadObject),
+            currentClients: clients,
+            connectedClientCount: firstIntValue(in: payloadObject, keys: ["connectedClientCount", "connected_client_count"]) ?? clients.count,
+            secureChannelReady: firstBoolValue(in: payloadObject, keys: ["secureChannelReady", "secure_channel_ready"]) ?? false
+        )
+    }
+
+    private func decodeBridgePairingPayload(from payloadObject: IncomingParamsObject?) -> CodexPairingQRPayload? {
+        guard let payloadObject,
+              let version = firstIntValue(in: payloadObject, keys: ["v"]),
+              let relay = firstStringValue(in: payloadObject, keys: ["relay"]),
+              let sessionId = firstStringValue(in: payloadObject, keys: ["sessionId", "session_id"]),
+              let macDeviceId = firstStringValue(in: payloadObject, keys: ["macDeviceId", "mac_device_id"]),
+              let macIdentityPublicKey = firstStringValue(in: payloadObject, keys: ["macIdentityPublicKey", "mac_identity_public_key"]),
+              let expiresAt = firstInt64Value(in: payloadObject, keys: ["expiresAt", "expires_at"]) else {
+            return nil
+        }
+
+        return CodexPairingQRPayload(
+            v: version,
+            relay: relay,
+            sessionId: sessionId,
+            macDeviceId: macDeviceId,
+            macIdentityPublicKey: macIdentityPublicKey,
+            expiresAt: expiresAt,
+            transport: firstStringValue(in: payloadObject, keys: ["transport"])
+                .flatMap(CodexRelayTransportMode.init(rawValue:))
+        )
+    }
+
+    private func decodeBridgePairedClientDeviceIds(from payloadObject: IncomingParamsObject) -> [String] {
+        let values = firstArrayValue(
+            in: payloadObject,
+            keys: ["pairedClientDeviceIds", "paired_client_device_ids"]
+        ) ?? []
+        return values.compactMap { value in
+            guard let stringValue = value.stringValue?.trimmingCharacters(in: .whitespacesAndNewlines),
+                  !stringValue.isEmpty else {
+                return nil
+            }
+            return stringValue
+        }
+    }
+
+    #if os(macOS)
+    private var isLocalMacBridgeTargetActive: Bool {
+        macConnectionTarget == .localThisMac && normalizedLocalBridgeServerURL != nil
+    }
+
+    private func refreshLocalBridgeSettingsSnapshot() async {
+        let bridgeControlService = BridgeControlService()
+        do {
+            let snapshot = try await bridgeControlService.loadSnapshot(relayOverride: nil)
+            let trustedState = try await bridgeControlService.loadTrustedState()
+            bridgeSettingsSnapshot = mapLocalBridgeSettingsSnapshot(
+                snapshot: snapshot,
+                trustedState: trustedState
+            )
+            bridgeSettingsErrorMessage = nil
+        } catch {
+            bridgeSettingsSnapshot = nil
+            bridgeSettingsErrorMessage = error.localizedDescription
+        }
+    }
+
+    func startLocalMacBridge() async throws {
+        try await BridgeControlService().startBridge(relayOverride: nil)
+    }
+
+    func stopLocalMacBridge() async throws {
+        try await BridgeControlService().stopBridge(relayOverride: nil)
+    }
+
+    func resetLocalMacBridgePairing() async throws {
+        try await BridgeControlService().resetPairing(relayOverride: nil)
+    }
+
+    private func mapLocalBridgeSettingsSnapshot(
+        snapshot: BridgeSnapshot,
+        trustedState: BridgeTrustedState
+    ) -> CodexBridgeSettingsSnapshot {
+        let pairingPayload = snapshot.pairingSession?.pairingPayload.map { payload in
+            CodexPairingQRPayload(
+                v: payload.v,
+                relay: payload.relay,
+                sessionId: payload.sessionId,
+                macDeviceId: payload.macDeviceId,
+                macIdentityPublicKey: payload.macIdentityPublicKey,
+                expiresAt: payload.expiresAt,
+                transport: payload.transport.flatMap(CodexRelayTransportMode.init(rawValue:))
+            )
+        }
+
+        let pairedIDs = trustedState.trustedPhoneDeviceID.map { [$0] } ?? []
+        let connectedClients = isConnected ? [CodexBridgeConnectedClient(
+            clientDeviceId: phoneIdentityState.phoneDeviceId,
+            keyEpoch: secureSession?.keyEpoch ?? 0,
+            isResumed: true
+        )] : []
+
+        return CodexBridgeSettingsSnapshot(
+            relayURL: normalizedNonEmptyString(snapshot.effectiveRelayURL),
+            relaySessionId: pairingPayload?.sessionId ?? trustedState.relaySessionId,
+            pairingPayload: pairingPayload,
+            pairingCode: nil,
+            bridgeState: snapshot.bridgeStatus?.state,
+            bridgeConnectionStatus: snapshot.bridgeStatus?.connectionStatus,
+            pairedClientDeviceIds: pairedIDs,
+            currentClients: connectedClients,
+            connectedClientCount: connectedClients.count,
+            secureChannelReady: snapshot.launchdLoaded && snapshot.bridgeStatus?.connectionStatus == "connected"
+        )
+    }
+
+    private func normalizedNonEmptyString(_ value: String?) -> String? {
+        guard let value = value?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !value.isEmpty else {
+            return nil
+        }
+        return value
+    }
+    #endif
+
+    private func legacyBridgeSettingsSnapshot() -> CodexBridgeSettingsSnapshot {
+        let relayURL = normalizedRelayURL ?? normalizedLocalBridgeServerURL
+        let keyEpoch = secureSession?.keyEpoch ?? 0
+        let client = isConnected ? CodexBridgeConnectedClient(
+            clientDeviceId: phoneIdentityState.phoneDeviceId,
+            keyEpoch: keyEpoch,
+            isResumed: true
+        ) : nil
+        let clients = client.map { [$0] } ?? []
+        return CodexBridgeSettingsSnapshot(
+            relayURL: relayURL,
+            relaySessionId: normalizedRelaySessionId,
+            pairingPayload: nil,
+            pairingCode: nil,
+            bridgeState: nil,
+            bridgeConnectionStatus: nil,
+            pairedClientDeviceIds: [],
+            currentClients: clients,
+            connectedClientCount: clients.count,
+            secureChannelReady: secureSession != nil || bypassSecureTransportForCurrentConnection
+        )
+    }
+
+    private func consumeUnsupportedBridgeSettingsRead(_ error: Error) -> Bool {
+        guard supportsBridgeSettingsRead,
+              shouldTreatAsUnsupportedBridgeSettingsRead(error) else {
+            return false
+        }
+        supportsBridgeSettingsRead = false
+        return true
+    }
+
+    private func shouldTreatAsUnsupportedBridgeSettingsRead(_ error: Error) -> Bool {
+        guard let serviceError = error as? CodexServiceError,
+              case .rpcError(let rpcError) = serviceError else {
+            return false
+        }
+
+        if rpcError.code == -32601 {
+            return true
+        }
+
+        let message = rpcError.message.lowercased()
+        let mentionsUnsupportedMethod = message.contains("method not found")
+            || message.contains("unknown method")
+            || message.contains("unknown variant")
+            || message.contains("expected one of")
+            || message.contains("not implemented")
+            || message.contains("does not support")
+        let mentionsBridgeSettingsMethod = message.contains("bridge/settings/read")
+            || message.contains("bridge settings")
+
+        guard rpcError.code == -32600 || rpcError.code == -32602 || rpcError.code == -32000 else {
+            return mentionsUnsupportedMethod && mentionsBridgeSettingsMethod
+        }
+
+        return mentionsUnsupportedMethod && mentionsBridgeSettingsMethod
+    }
+
+    private func unsupportedBridgeSettingsMessage() -> String {
+        "This Mac runtime does not support bridge access details yet. Update Remodex on your Mac to view QR and live connected clients."
+    }
+
     func decodeGPTLoginStartResult(from response: RPCMessage) throws -> CodexGPTLoginStartResult {
         guard let payloadObject = response.result?.objectValue else {
             throw CodexServiceError.invalidResponse("account/login/start response missing payload")
@@ -1122,6 +1411,66 @@ extension CodexService {
 
             if let value = object[key]?.intValue {
                 return value != 0
+            }
+        }
+
+        return nil
+    }
+
+    func firstObjectValue(in object: IncomingParamsObject?, keys: [String]) -> IncomingParamsObject? {
+        guard let object else {
+            return nil
+        }
+
+        for key in keys {
+            if let nestedObject = object[key]?.objectValue {
+                return nestedObject
+            }
+        }
+
+        return nil
+    }
+
+    func firstArrayValue(in object: IncomingParamsObject?, keys: [String]) -> [JSONValue]? {
+        guard let object else {
+            return nil
+        }
+
+        for key in keys {
+            if let values = object[key]?.arrayValue {
+                return values
+            }
+        }
+
+        return nil
+    }
+
+    func firstInt64Value(in object: IncomingParamsObject?, keys: [String]) -> Int64? {
+        guard let object else {
+            return nil
+        }
+
+        for key in keys {
+            guard let value = object[key] else {
+                continue
+            }
+
+            switch value {
+            case .integer(let integer):
+                return Int64(integer)
+            case .double(let double):
+                guard double.isFinite else { continue }
+                return Int64(double)
+            case .string(let string):
+                let trimmed = string.trimmingCharacters(in: .whitespacesAndNewlines)
+                if let integerValue = Int64(trimmed) {
+                    return integerValue
+                }
+                if let doubleValue = Double(trimmed), doubleValue.isFinite {
+                    return Int64(doubleValue)
+                }
+            default:
+                continue
             }
         }
 

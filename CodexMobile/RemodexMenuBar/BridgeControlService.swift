@@ -5,6 +5,7 @@
 // Depends on: Foundation, CryptoKit, Security, BridgeControlModels
 
 import CryptoKit
+import Darwin
 import Foundation
 import Security
 
@@ -244,7 +245,8 @@ private final class NativePairingService {
             sessionId: trustedState.relaySessionId,
             macDeviceId: trustedState.macDeviceId,
             macIdentityPublicKey: trustedState.macIdentityPublicKey,
-            expiresAt: expiresAt
+            expiresAt: expiresAt,
+            transport: "direct_app_server"
         )
     }
 }
@@ -295,7 +297,7 @@ private final class NativeSecureChannelService: SecureTransporting {
 }
 
 private final class NativeCodexRuntimeHost: CodexHosting {
-    private static let localAppServerListenURL = "ws://127.0.0.1:9000"
+    private static let localAppServerListenURL = "ws://0.0.0.0:9000"
     private let runner: ShellCommandRunner
     private let stateStore: NativeBridgeStateStore
     private let callbackQueue = DispatchQueue(label: "bridgecore.codex.stream", qos: .utility)
@@ -471,7 +473,8 @@ private final class NativeBridgeRuntimeController: BridgeRuntimeControlling {
         _ = try await secureChannel.beginHandshake()
         let trusted = try stateStore.readTrustedState()
         let current = try stateStore.readSnapshot()
-        let relayURL = current.daemonConfig?.relayUrl ?? "ws://localhost:9000/relay"
+        let configuredRelayURL = current.daemonConfig?.relayUrl ?? "ws://localhost:9000/relay"
+        let relayURL = directAppServerPairingURL(from: configuredRelayURL)
         let pairingPayload = pairingService.makePairingPayload(relayURL: relayURL, trustedState: trusted)
 
         let next = BridgeSnapshot(
@@ -498,6 +501,79 @@ private final class NativeBridgeRuntimeController: BridgeRuntimeControlling {
         )
 
         try stateStore.writeSnapshot(next)
+    }
+
+    // Rewrites loopback relay hosts to a LAN-reachable IP so phone/iPad QR pairing works off-device.
+    private func directAppServerPairingURL(from rawRelayURL: String) -> String {
+        guard var components = URLComponents(string: rawRelayURL),
+              let host = components.host?.lowercased() else {
+            return rawRelayURL
+        }
+
+        if isLoopbackHost(host), let lanIPAddress = preferredLANIPv4Address() {
+            components.host = lanIPAddress
+        }
+
+        components.path = ""
+        components.query = nil
+        components.fragment = nil
+        return components.string ?? rawRelayURL
+    }
+
+    private func isLoopbackHost(_ host: String) -> Bool {
+        host == "localhost" || host == "127.0.0.1" || host == "::1"
+    }
+
+    private func preferredLANIPv4Address() -> String? {
+        var addressList: UnsafeMutablePointer<ifaddrs>?
+        guard getifaddrs(&addressList) == 0, let firstAddress = addressList else {
+            return nil
+        }
+        defer { freeifaddrs(addressList) }
+
+        var cursor: UnsafeMutablePointer<ifaddrs>? = firstAddress
+        while let interface = cursor {
+            defer { cursor = interface.pointee.ifa_next }
+
+            let flags = Int32(interface.pointee.ifa_flags)
+            let isUp = (flags & IFF_UP) != 0
+            let isRunning = (flags & IFF_RUNNING) != 0
+            let isLoopback = (flags & IFF_LOOPBACK) != 0
+            guard isUp, isRunning, !isLoopback else {
+                continue
+            }
+
+            guard let rawAddress = interface.pointee.ifa_addr,
+                  rawAddress.pointee.sa_family == UInt8(AF_INET) else {
+                continue
+            }
+
+            let interfaceName = String(cString: interface.pointee.ifa_name)
+            guard interfaceName.hasPrefix("en") else {
+                continue
+            }
+
+            var hostBuffer = [CChar](repeating: 0, count: Int(NI_MAXHOST))
+            let result = getnameinfo(
+                rawAddress,
+                socklen_t(rawAddress.pointee.sa_len),
+                &hostBuffer,
+                socklen_t(hostBuffer.count),
+                nil,
+                0,
+                NI_NUMERICHOST
+            )
+            guard result == 0 else {
+                continue
+            }
+
+            let candidate = String(cString: hostBuffer)
+            if !candidate.isEmpty {
+                return candidate
+            }
+        }
+
+        return nil
     }
 
     func stop() async throws {
@@ -527,6 +603,10 @@ private final class NativeBridgeRuntimeController: BridgeRuntimeControlling {
 
     func status() async throws -> BridgeSnapshot {
         try stateStore.readSnapshot()
+    }
+
+    func trustedState() async throws -> BridgeTrustedState {
+        try stateStore.readTrustedState()
     }
 
     func resetPairing() async throws {
@@ -627,6 +707,10 @@ final class BridgeControlService {
             stdoutLogPath: snapshot.stdoutLogPath,
             stderrLogPath: snapshot.stderrLogPath
         )
+    }
+
+    func loadTrustedState() async throws -> BridgeTrustedState {
+        try await runtimeController.trustedState()
     }
 
     func startBridge(relayOverride _: String?) async throws {

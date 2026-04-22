@@ -539,7 +539,8 @@ function startBridge({
     if (method !== "account/status/read"
       && method !== "getAuthStatus"
       && method !== "account/login/openOnMac"
-      && method !== "voice/resolveAuth") {
+      && method !== "voice/resolveAuth"
+      && method !== "bridge/settings/read") {
       return false;
     }
 
@@ -570,9 +571,29 @@ function startBridge({
         return openPendingAuthLoginOnMac(params);
       case "voice/resolveAuth":
         return resolveVoiceAuth(sendCodexRequest);
+      case "bridge/settings/read":
+        return readBridgeSettingsSnapshot();
       default:
         throw new Error(`Unsupported bridge-managed account method: ${method}`);
     }
+  }
+
+  // Exposes bridge pairing + remote relay metadata for Settings without revealing secrets/tokens.
+  function readBridgeSettingsSnapshot() {
+    const pairingPayload = pairingSession?.pairingPayload || null;
+    const pairingCode = typeof pairingSession?.pairingCode === "string"
+      ? pairingSession.pairingCode.trim()
+      : "";
+    const currentClients = secureTransport.currentClientSessions();
+    return {
+      relayUrl: relayBaseUrl,
+      relaySessionId: sessionId,
+      pairingPayload,
+      pairingCode: pairingCode || null,
+      currentClients,
+      connectedClientCount: currentClients.length,
+      secureChannelReady: secureTransport.isSecureChannelReady(),
+    };
   }
 
   // Combines account/read + getAuthStatus into one safe snapshot for the phone UI.
@@ -1190,7 +1211,7 @@ function createMacOSBridgeWakeAssertion({
   };
 }
 
-// Registers the canonical Mac identity and the one trusted iPhone allowed for auto-resolve.
+// Registers the canonical Mac identity and trusted client allowlist for auto-resolve/auth.
 function buildMacRegistrationHeaders(deviceState, pairingSession) {
   const registration = buildMacRegistration(deviceState, pairingSession);
   const headers = {
@@ -1200,7 +1221,12 @@ function buildMacRegistrationHeaders(deviceState, pairingSession) {
     "x-pairing-code": registration.pairingCode,
     "x-pairing-version": registration.pairingVersion ? String(registration.pairingVersion) : "",
     "x-pairing-expires-at": registration.pairingExpiresAt ? String(registration.pairingExpiresAt) : "",
+    "x-trusted-clients": Buffer.from(
+      JSON.stringify(registration.trustedClients || {}),
+      "utf8"
+    ).toString("base64"),
   };
+  // Keep legacy single-trusted-phone headers for older relays.
   if (registration.trustedPhoneDeviceId && registration.trustedPhonePublicKey) {
     headers["x-trusted-phone-device-id"] = registration.trustedPhoneDeviceId;
     headers["x-trusted-phone-public-key"] = registration.trustedPhonePublicKey;
@@ -1209,11 +1235,13 @@ function buildMacRegistrationHeaders(deviceState, pairingSession) {
 }
 
 function buildMacRegistration(deviceState, pairingSession) {
-  const trustedPhoneEntry = Object.entries(deviceState?.trustedPhones || {})[0] || null;
+  const trustedClients = normalizeTrustedClients(deviceState?.trustedPhones);
+  const trustedPhoneEntry = Object.entries(trustedClients)[0] || null;
   return {
     macDeviceId: normalizeNonEmptyString(deviceState?.macDeviceId),
     macIdentityPublicKey: normalizeNonEmptyString(deviceState?.macIdentityPublicKey),
     displayName: normalizeNonEmptyString(os.hostname()),
+    trustedClients,
     trustedPhoneDeviceId: normalizeNonEmptyString(trustedPhoneEntry?.[0]),
     trustedPhonePublicKey: normalizeNonEmptyString(trustedPhoneEntry?.[1]),
     pairingCode: normalizeNonEmptyString(pairingSession?.pairingCode),
@@ -1222,6 +1250,23 @@ function buildMacRegistration(deviceState, pairingSession) {
       ? pairingSession.pairingPayload.expiresAt
       : 0,
   };
+}
+
+function normalizeTrustedClients(rawTrustedClients) {
+  if (!rawTrustedClients || typeof rawTrustedClients !== "object") {
+    return {};
+  }
+
+  const normalized = {};
+  for (const [deviceId, publicKey] of Object.entries(rawTrustedClients)) {
+    const normalizedDeviceId = normalizeNonEmptyString(deviceId);
+    const normalizedPublicKey = normalizeNonEmptyString(publicKey);
+    if (!normalizedDeviceId || !normalizedPublicKey) {
+      continue;
+    }
+    normalized[normalizedDeviceId] = normalizedPublicKey;
+  }
+  return normalized;
 }
 
 function shutdown(codex, getSocket, beforeExit = () => {}) {

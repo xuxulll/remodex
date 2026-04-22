@@ -7,6 +7,9 @@
 import CryptoKit
 import Foundation
 import Security
+#if os(iOS)
+import UIKit
+#endif
 
 extension CodexService {
     // Completes the secure handshake before any JSON-RPC traffic is sent over the relay.
@@ -47,6 +50,7 @@ extension CodexService {
 
         let phoneEphemeralPrivateKey = Curve25519.KeyAgreement.PrivateKey()
         let clientNonce = randomSecureNonce()
+        try await sendClientRegister(sessionId: sessionId)
         let clientHello = SecureClientHello(
             protocolVersion: relayProtocolVersion,
             sessionId: sessionId,
@@ -204,6 +208,7 @@ extension CodexService {
             SecureResumeState(
                 sessionId: sessionId,
                 keyEpoch: serverHello.keyEpoch,
+                clientDeviceId: phoneIdentityState.phoneDeviceId,
                 lastAppliedBridgeOutboundSeq: lastAppliedBridgeOutboundSeq
             )
         )
@@ -254,6 +259,8 @@ extension CodexService {
             keyEpoch: secureSession.keyEpoch,
             sender: "iphone",
             counter: secureSession.nextOutboundCounter,
+            clientDeviceId: phoneIdentityState.phoneDeviceId,
+            targetClientDeviceId: nil,
             ciphertext: sealedBox.ciphertext.base64EncodedString(),
             tag: sealedBox.tag.base64EncodedString()
         )
@@ -270,12 +277,17 @@ extension CodexService {
     func rememberRelayPairing(_ payload: CodexPairingQRPayload) {
         SecureStore.writeString(payload.sessionId, for: CodexSecureKeys.relaySessionId)
         SecureStore.writeString(payload.relay, for: CodexSecureKeys.relayUrl)
+        SecureStore.writeString(
+            (payload.transport ?? .secureRelay).rawValue,
+            for: CodexSecureKeys.relayTransportMode
+        )
         SecureStore.writeString(payload.macDeviceId, for: CodexSecureKeys.relayMacDeviceId)
         SecureStore.writeString(payload.macIdentityPublicKey, for: CodexSecureKeys.relayMacIdentityPublicKey)
         SecureStore.writeString(String(codexSecureProtocolVersion), for: CodexSecureKeys.relayProtocolVersion)
         SecureStore.writeString("0", for: CodexSecureKeys.relayLastAppliedBridgeOutboundSeq)
         relaySessionId = payload.sessionId
         relayUrl = payload.relay
+        relayTransportMode = payload.transport ?? .secureRelay
         relayMacDeviceId = payload.macDeviceId
         relayMacIdentityPublicKey = payload.macIdentityPublicKey
         relayProtocolVersion = codexSecureProtocolVersion
@@ -429,7 +441,8 @@ extension CodexService {
                 sessionId: resolved.sessionId,
                 macDeviceId: resolved.macDeviceId,
                 macIdentityPublicKey: resolved.macIdentityPublicKey,
-                expiresAt: resolved.expiresAt
+                expiresAt: resolved.expiresAt,
+                transport: .secureRelay
             )
         }
 
@@ -571,6 +584,8 @@ private extension CodexService {
               envelope.sessionId == secureSession.sessionId,
               envelope.keyEpoch == secureSession.keyEpoch,
               envelope.sender == "mac",
+              (envelope.targetClientDeviceId == nil || envelope.targetClientDeviceId == phoneIdentityState.phoneDeviceId),
+              (envelope.clientDeviceId == nil || envelope.clientDeviceId == phoneIdentityState.phoneDeviceId),
               envelope.counter > secureSession.lastInboundCounter else {
             lastErrorMessage = "The secure Remodex payload could not be verified."
             secureConnectionState = .rePairRequired
@@ -658,6 +673,8 @@ private extension CodexService {
             macDeviceId: trustedMac.macDeviceId,
             phoneDeviceId: phoneIdentityState.phoneDeviceId,
             phoneIdentityPublicKey: phoneIdentityState.phoneIdentityPublicKey,
+            clientDeviceId: phoneIdentityState.phoneDeviceId,
+            clientIdentityPublicKey: phoneIdentityState.phoneIdentityPublicKey,
             nonce: nonce,
             timestamp: timestamp,
             signature: signature
@@ -725,14 +742,55 @@ private extension CodexService {
         }
     }
 
+    func sendClientRegister(sessionId: String) async throws {
+        let timestamp = Int64(Date().timeIntervalSince1970 * 1_000)
+        let nonce = UUID().uuidString
+        let transcript = codexClientRegisterTranscriptBytes(
+            sessionId: sessionId,
+            clientDeviceId: phoneIdentityState.phoneDeviceId,
+            clientIdentityPublicKey: phoneIdentityState.phoneIdentityPublicKey,
+            nonce: nonce,
+            timestamp: timestamp
+        )
+        let phonePrivateKey = try Curve25519.Signing.PrivateKey(
+            rawRepresentation: Data(base64EncodedOrEmpty: phoneIdentityState.phoneIdentityPrivateKey)
+        )
+        let signature = try phonePrivateKey.signature(for: transcript).base64EncodedString()
+        let register = SecureClientRegister(
+            sessionId: sessionId,
+            clientDeviceId: phoneIdentityState.phoneDeviceId,
+            clientIdentityPublicKey: phoneIdentityState.phoneIdentityPublicKey,
+            clientType: secureClientType(),
+            timestamp: timestamp,
+            nonce: nonce,
+            signature: signature
+        )
+        try await sendWireControlMessage(register)
+    }
+
+    func secureClientType() -> CodexSecureClientType {
+#if os(macOS)
+        return .desktop
+#else
+        #if os(iOS)
+        if UIDevice.current.userInterfaceIdiom == .pad {
+            return .ipad
+        }
+        #endif
+        return .iphone
+#endif
+    }
+
     private func rememberResolvedTrustedSession(_ resolved: CodexTrustedSessionResolveResponse, relayURL: String) {
         SecureStore.writeString(resolved.sessionId, for: CodexSecureKeys.relaySessionId)
         SecureStore.writeString(relayURL, for: CodexSecureKeys.relayUrl)
+        SecureStore.writeString(CodexRelayTransportMode.secureRelay.rawValue, for: CodexSecureKeys.relayTransportMode)
         SecureStore.writeString(resolved.macDeviceId, for: CodexSecureKeys.relayMacDeviceId)
         SecureStore.writeString(resolved.macIdentityPublicKey, for: CodexSecureKeys.relayMacIdentityPublicKey)
         SecureStore.writeString(String(codexSecureProtocolVersion), for: CodexSecureKeys.relayProtocolVersion)
         relaySessionId = resolved.sessionId
         relayUrl = relayURL
+        relayTransportMode = .secureRelay
         relayMacDeviceId = resolved.macDeviceId
         relayMacIdentityPublicKey = resolved.macIdentityPublicKey
         relayProtocolVersion = codexSecureProtocolVersion

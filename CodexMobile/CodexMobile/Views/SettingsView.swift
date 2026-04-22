@@ -4,8 +4,12 @@
 // Exports: SettingsView
 
 import SwiftUI
+import CoreImage
+import CoreImage.CIFilterBuiltins
 #if os(iOS)
 import UIKit
+#elseif os(macOS)
+import AppKit
 #endif
 import UserNotifications
 
@@ -31,6 +35,7 @@ struct SettingsView: View {
                 SettingsAboutCard()
                 SettingsUsageCard()
                 connectionSection
+                SettingsBridgeAccessCard()
             }
             .padding()
         }
@@ -197,6 +202,32 @@ struct SettingsView: View {
                     codex.forgetTrustedMac()
                 }
             }
+
+            #if os(macOS)
+            Divider()
+            HStack {
+                Text("Connection target")
+                Spacer()
+                Picker("Connection target", selection: macConnectionTargetSelection) {
+                    Text("Local This Mac").tag(CodexMacConnectionTarget.localThisMac)
+                    Text("Remote Mac Bridge").tag(CodexMacConnectionTarget.remoteMacBridge)
+                }
+                .pickerStyle(.menu)
+                .labelsHidden()
+                .tint(settingsAccentColor)
+            }
+            #endif
+
+            if !trustedDeviceRows.isEmpty {
+                Divider()
+                Text("Trusted Devices")
+                    .font(AppFont.caption(weight: .semibold))
+                    .foregroundStyle(.secondary)
+
+                ForEach(trustedDeviceRows, id: \.macDeviceId) { trustedMac in
+                    trustedDeviceRow(trustedMac)
+                }
+            }
         }
     }
 
@@ -244,6 +275,42 @@ struct SettingsView: View {
             await codex.disconnect()
             codex.clearSavedRelaySession()
         }
+    }
+
+    private var trustedDeviceRows: [CodexTrustedMacRecord] {
+        codex.trustedMacRegistry.records.values.sorted { lhs, rhs in
+            (lhs.lastUsedAt ?? lhs.lastPairedAt) > (rhs.lastUsedAt ?? rhs.lastPairedAt)
+        }
+    }
+
+    private var macConnectionTargetSelection: Binding<CodexMacConnectionTarget> {
+        Binding(
+            get: { codex.macConnectionTarget },
+            set: { codex.setMacConnectionTarget($0) }
+        )
+    }
+
+    @ViewBuilder
+    private func trustedDeviceRow(_ trustedMac: CodexTrustedMacRecord) -> some View {
+        let trimmedDisplayName = trustedMac.displayName?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let displayName = trimmedDisplayName.isEmpty ? "Mac" : trimmedDisplayName
+        HStack(spacing: 10) {
+            VStack(alignment: .leading, spacing: 2) {
+                Text(displayName)
+                    .font(AppFont.subheadline(weight: .semibold))
+                    .foregroundStyle(.primary)
+                Text(codexSecureFingerprint(for: trustedMac.macIdentityPublicKey))
+                    .font(AppFont.mono(.caption))
+                    .foregroundStyle(.secondary)
+            }
+            Spacer()
+            Button("Revoke", role: .destructive) {
+                codex.forgetTrustedMac(deviceId: trustedMac.macDeviceId)
+            }
+            .buttonStyle(.borderless)
+            .font(AppFont.caption(weight: .semibold))
+        }
+        .padding(.vertical, 4)
     }
 
     // MARK: - Runtime bindings
@@ -426,6 +493,354 @@ private struct SettingsUsageCard: View {
     private func refreshStatusData() async {
         await codex.refreshUsageStatus(threadId: nil)
     }
+}
+
+private struct SettingsBridgeAccessCard: View {
+    @Environment(CodexService.self) private var codex
+    @Environment(\.scenePhase) private var scenePhase
+
+    @State private var isRefreshing = false
+    @State private var isUpdatingLocalBridge = false
+
+    private static let qrContext = CIContext()
+    private static let qrSize: CGFloat = 172
+
+    var body: some View {
+        SettingsCard(title: "Bridge Access") {
+            HStack(spacing: 8) {
+                Text("Secure channel")
+                Spacer()
+                SettingsStatusPill(label: secureChannelLabel)
+            }
+
+            if let snapshot = codex.bridgeSettingsSnapshot {
+                if let bridgeState = nonEmpty(snapshot.bridgeState)
+                    ?? nonEmpty(snapshot.bridgeConnectionStatus) {
+                    bridgeInfoRow("Bridge runtime", value: bridgeState, monospaced: false)
+                }
+
+                if let pairingPayload = snapshot.pairingPayload {
+                    qrPayloadSection(pairingPayload)
+                }
+
+                Divider()
+                bridgeInfoRow(
+                    "Relay",
+                    value: nonEmpty(snapshot.relayURL) ?? "Unavailable",
+                    monospaced: true
+                )
+                bridgeInfoRow(
+                    "Session",
+                    value: nonEmpty(snapshot.relaySessionId) ?? "Unavailable",
+                    monospaced: true
+                )
+                if let pairingCode = nonEmpty(snapshot.pairingCode) {
+                    bridgeInfoRow("Pairing code", value: pairingCode, monospaced: true)
+                }
+
+                if !snapshot.pairedClientDeviceIds.isEmpty {
+                    Divider()
+                    Text("Paired Clients")
+                        .font(AppFont.caption(weight: .semibold))
+                        .foregroundStyle(.secondary)
+
+                    ForEach(snapshot.pairedClientDeviceIds, id: \.self) { clientDeviceId in
+                        HStack(spacing: 10) {
+                            Text(clientDeviceId)
+                                .font(AppFont.mono(.caption))
+                                .foregroundStyle(.primary)
+                                .lineLimit(1)
+                            Spacer()
+                            SettingsStatusPill(label: "Paired")
+                        }
+                        .padding(.vertical, 2)
+                    }
+                }
+
+                Divider()
+                Text("Connected Clients (\(snapshot.connectedClientCount))")
+                    .font(AppFont.caption(weight: .semibold))
+                    .foregroundStyle(.secondary)
+
+                if snapshot.currentClients.isEmpty {
+                    Text("No active clients on this bridge session.")
+                        .font(AppFont.caption())
+                        .foregroundStyle(.secondary)
+                } else {
+                    ForEach(snapshot.currentClients, id: \.clientDeviceId) { client in
+                        connectedClientRow(client)
+                    }
+                }
+            } else if codex.isLoadingBridgeSettingsSnapshot {
+                HStack(spacing: 8) {
+                    ProgressView()
+                    Text("Loading bridge access details...")
+                        .font(AppFont.caption())
+                        .foregroundStyle(.secondary)
+                }
+            } else {
+                Text("Connect to a Mac bridge to view pairing QR and remote session info.")
+                    .font(AppFont.caption())
+                    .foregroundStyle(.secondary)
+            }
+
+            if let error = nonEmpty(codex.bridgeSettingsErrorMessage) {
+                Text(error)
+                    .font(AppFont.caption())
+                    .foregroundStyle(.orange)
+            }
+
+            #if os(macOS)
+            if codex.macConnectionTarget == .localThisMac {
+                Divider()
+                localBridgeControlSection
+            }
+            #endif
+
+            SettingsButton("Refresh", isLoading: isRefreshing) {
+                refreshSnapshot()
+            }
+        }
+        .task {
+            await refreshSnapshotIfNeeded()
+        }
+        .onChange(of: scenePhase) { _, phase in
+            guard phase == .active else { return }
+            Task {
+                await refreshSnapshotIfNeeded()
+            }
+        }
+    }
+
+    private var secureChannelLabel: String {
+        codex.bridgeSettingsSnapshot?.secureChannelReady == true ? "Ready" : "Waiting"
+    }
+
+    @ViewBuilder
+    private func qrPayloadSection(_ payload: CodexPairingQRPayload) -> some View {
+        let qrText = bridgePairingPayloadJSONString(payload)
+
+        VStack(alignment: .leading, spacing: 8) {
+            Text("Pair on iPhone or iPad")
+                .font(AppFont.caption(weight: .semibold))
+                .foregroundStyle(.secondary)
+
+            HStack(alignment: .top, spacing: 14) {
+                if let qrImage = bridgeQRCodeImage(from: qrText) {
+                    qrImage
+                        .interpolation(.none)
+                        .resizable()
+                        .scaledToFit()
+                        .frame(width: Self.qrSize, height: Self.qrSize)
+                        .padding(8)
+                        .background(
+                            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                                .fill(.white)
+                        )
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                                .stroke(Color.primary.opacity(0.08), lineWidth: 1)
+                        )
+                } else {
+                    RoundedRectangle(cornerRadius: 12, style: .continuous)
+                        .fill(Color(.secondarySystemFill))
+                        .frame(width: Self.qrSize, height: Self.qrSize)
+                        .overlay(
+                            Image(systemName: "qrcode")
+                                .font(.system(size: 28, weight: .semibold))
+                                .foregroundStyle(.secondary)
+                        )
+                }
+
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("Scan from another device to join this same Mac bridge session.")
+                        .font(AppFont.caption())
+                        .foregroundStyle(.secondary)
+                    Text("Operations run over this Mac bridge after pairing.")
+                        .font(AppFont.caption())
+                        .foregroundStyle(.secondary)
+
+                    if let expiresText = pairingExpiryText(from: payload.expiresAt) {
+                        Text(expiresText)
+                            .font(AppFont.caption())
+                            .foregroundStyle(.secondary)
+                    }
+                }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func bridgeInfoRow(_ title: String, value: String, monospaced: Bool) -> some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Text(title)
+                .font(AppFont.caption(weight: .semibold))
+                .foregroundStyle(.secondary)
+            if monospaced {
+                Text(value)
+                    .font(AppFont.mono(.caption))
+                    .foregroundStyle(.primary)
+                    .textSelection(.enabled)
+            } else {
+                Text(value)
+                    .font(AppFont.caption())
+                    .foregroundStyle(.primary)
+                    .textSelection(.enabled)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func connectedClientRow(_ client: CodexBridgeConnectedClient) -> some View {
+        HStack(spacing: 10) {
+            VStack(alignment: .leading, spacing: 2) {
+                Text(client.clientDeviceId)
+                    .font(AppFont.mono(.caption))
+                    .foregroundStyle(.primary)
+                    .lineLimit(1)
+                Text("Key epoch \(client.keyEpoch)")
+                    .font(AppFont.caption())
+                    .foregroundStyle(.secondary)
+            }
+            Spacer()
+            SettingsStatusPill(label: client.isResumed ? "Resumed" : "Handshaking")
+        }
+        .padding(.vertical, 2)
+    }
+
+    private func refreshSnapshot() {
+        guard !isRefreshing else { return }
+        isRefreshing = true
+        Task {
+            await codex.refreshBridgeSettingsSnapshot()
+            await MainActor.run {
+                isRefreshing = false
+            }
+        }
+    }
+
+    private func refreshSnapshotIfNeeded() async {
+        #if os(macOS)
+        let canReadSnapshot = codex.isConnected || codex.macConnectionTarget == .localThisMac
+        #else
+        let canReadSnapshot = codex.isConnected
+        #endif
+        guard canReadSnapshot else { return }
+        guard !isRefreshing else { return }
+
+        await MainActor.run {
+            isRefreshing = true
+        }
+        await codex.refreshBridgeSettingsSnapshot()
+        await MainActor.run {
+            isRefreshing = false
+        }
+    }
+
+    private func bridgePairingPayloadJSONString(_ payload: CodexPairingQRPayload) -> String {
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys]
+        guard let data = try? encoder.encode(payload),
+              let json = String(data: data, encoding: .utf8) else {
+            return ""
+        }
+        return json
+    }
+
+    private func bridgeQRCodeImage(from payloadText: String) -> Image? {
+        guard !payloadText.isEmpty else { return nil }
+
+        let filter = CIFilter.qrCodeGenerator()
+        filter.message = Data(payloadText.utf8)
+        filter.correctionLevel = "M"
+
+        guard let outputImage = filter.outputImage else {
+            return nil
+        }
+
+        let transform = CGAffineTransform(scaleX: 8, y: 8)
+        let scaledImage = outputImage.transformed(by: transform)
+
+        guard let cgImage = Self.qrContext.createCGImage(scaledImage, from: scaledImage.extent) else {
+            return nil
+        }
+
+        #if os(iOS)
+        return Image(uiImage: UIImage(cgImage: cgImage))
+        #elseif os(macOS)
+        return Image(nsImage: NSImage(cgImage: cgImage, size: .zero))
+        #else
+        return nil
+        #endif
+    }
+
+    private func pairingExpiryText(from unixSeconds: Int64) -> String? {
+        guard unixSeconds > 0 else { return nil }
+        let date = Date(timeIntervalSince1970: TimeInterval(unixSeconds))
+        return "QR expires \(date.formatted(date: .abbreviated, time: .shortened))"
+    }
+
+    private func nonEmpty(_ value: String?) -> String? {
+        guard let value = value?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !value.isEmpty else {
+            return nil
+        }
+        return value
+    }
+
+    #if os(macOS)
+    @ViewBuilder
+    private var localBridgeControlSection: some View {
+        Text("Local Mac Bridge")
+            .font(AppFont.caption(weight: .semibold))
+            .foregroundStyle(.secondary)
+
+        HStack(spacing: 8) {
+            SettingsButton("Start", isLoading: isUpdatingLocalBridge) {
+                updateLocalBridge(action: .start)
+            }
+            SettingsButton("Stop", isLoading: isUpdatingLocalBridge) {
+                updateLocalBridge(action: .stop)
+            }
+            SettingsButton("Reset Pairing", role: .destructive, isLoading: isUpdatingLocalBridge) {
+                updateLocalBridge(action: .resetPairing)
+            }
+        }
+    }
+
+    private enum LocalBridgeAction {
+        case start
+        case stop
+        case resetPairing
+    }
+
+    private func updateLocalBridge(action: LocalBridgeAction) {
+        guard !isUpdatingLocalBridge else { return }
+        isUpdatingLocalBridge = true
+        Task {
+            do {
+                switch action {
+                case .start:
+                    try await codex.startLocalMacBridge()
+                case .stop:
+                    try await codex.stopLocalMacBridge()
+                case .resetPairing:
+                    try await codex.resetLocalMacBridgePairing()
+                }
+                await codex.refreshBridgeSettingsSnapshot()
+                await MainActor.run {
+                    codex.bridgeSettingsErrorMessage = nil
+                    isUpdatingLocalBridge = false
+                }
+            } catch {
+                await MainActor.run {
+                    codex.bridgeSettingsErrorMessage = error.localizedDescription
+                    isUpdatingLocalBridge = false
+                }
+            }
+        }
+    }
+    #endif
 }
 
 private struct SettingsAppearanceCard: View {

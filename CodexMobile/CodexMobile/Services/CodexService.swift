@@ -230,6 +230,11 @@ enum CodexConnectionPhase: Equatable, Sendable {
     case connected
 }
 
+enum CodexMacConnectionTarget: String, Codable, Sendable, CaseIterable {
+    case localThisMac
+    case remoteMacBridge
+}
+
 enum CodexPendingThreadComposerAction: Equatable, Sendable {
     case codeReview(target: CodexPendingCodeReviewTarget)
 }
@@ -386,6 +391,8 @@ final class CodexService {
     var supportsBridgeVoiceAuth = true
     // Runtime compatibility flag for native `thread/fork` conversation branching.
     var supportsThreadFork = true
+    // Runtime compatibility flag for bridge-owned settings snapshot (`bridge/settings/read`).
+    var supportsBridgeSettingsRead = true
     // Seeds brand-new chats with one-shot composer actions like code review.
     var pendingComposerActionByThreadID: [String: CodexPendingThreadComposerAction] = [:]
     // In-memory identity directory for subagents, keyed by thread id and agent id.
@@ -394,18 +401,24 @@ final class CodexService {
     // Relay session persistence
     var relaySessionId: String?
     var relayUrl: String?
+    var relayTransportMode: CodexRelayTransportMode = .secureRelay
     var relayMacDeviceId: String?
     var relayMacIdentityPublicKey: String?
     var relayProtocolVersion: Int = codexSecureProtocolVersion
     var lastAppliedBridgeOutboundSeq = 0
     // Local macOS-only direct app-server endpoint used when the app hosts its own bridge runtime.
     var localBridgeServerURL: String?
+    var macConnectionTarget: CodexMacConnectionTarget = .localThisMac
     // Allows the desktop client to talk plaintext JSON-RPC directly to a local app-server endpoint.
     var bypassSecureTransportForCurrentConnection = false
     // Mirrors the bridge package version currently running on the Mac, if the bridge reports it.
     var bridgeInstalledVersion: String?
     // Mirrors the latest published bridge package version, when the bridge can resolve it.
     var latestBridgePackageVersion: String?
+    // Bridge-managed settings snapshot (pairing QR, relay target, and live connected clients).
+    var bridgeSettingsSnapshot: CodexBridgeSettingsSnapshot?
+    var isLoadingBridgeSettingsSnapshot = false
+    var bridgeSettingsErrorMessage: String?
     // Fresh QR scans must use bootstrap once, even if this Mac was already trusted before.
     var shouldForceQRBootstrapOnNextHandshake = false
     // Stops infinite trusted-reconnect loops by escalating back to QR after repeated handshake failures.
@@ -598,6 +611,7 @@ final class CodexService {
     static let associatedManagedWorktreePathsDefaultsKey = "codex.associatedManagedWorktreePaths"
     static let notificationsPromptedDefaultsKey = "codex.notifications.prompted"
     static let keepMacAwakeWhileBridgeRunsDefaultsKey = "codex.keepMacAwakeWhileBridgeRuns"
+    static let macConnectionTargetDefaultsKey = "codex.macConnectionTarget"
 
     init(
         encoder: JSONEncoder = JSONEncoder(),
@@ -715,6 +729,13 @@ final class CodexService {
             self.selectedAccessMode = .onRequest
         }
 
+        if let savedMacConnectionTarget = defaults.string(forKey: Self.macConnectionTargetDefaultsKey),
+           let parsedMacConnectionTarget = CodexMacConnectionTarget(rawValue: savedMacConnectionTarget) {
+            self.macConnectionTarget = parsedMacConnectionTarget
+        } else {
+            self.macConnectionTarget = .localThisMac
+        }
+
         if let persistedGPTAccountSnapshot = loadPersistedGPTAccountSnapshot() {
             self.gptAccountSnapshot = persistedGPTAccountSnapshot
         } else {
@@ -742,6 +763,12 @@ final class CodexService {
         // Restore relay session from Keychain
         self.relaySessionId = SecureStore.readString(for: CodexSecureKeys.relaySessionId)
         self.relayUrl = SecureStore.readString(for: CodexSecureKeys.relayUrl)
+        if let rawRelayTransportMode = SecureStore.readString(for: CodexSecureKeys.relayTransportMode),
+           let parsedRelayTransportMode = CodexRelayTransportMode(rawValue: rawRelayTransportMode) {
+            self.relayTransportMode = parsedRelayTransportMode
+        } else {
+            self.relayTransportMode = .secureRelay
+        }
         self.relayMacDeviceId = SecureStore.readString(for: CodexSecureKeys.relayMacDeviceId)
         self.relayMacIdentityPublicKey = SecureStore.readString(for: CodexSecureKeys.relayMacIdentityPublicKey)
         if let rawProtocolVersion = SecureStore.readString(for: CodexSecureKeys.relayProtocolVersion),
@@ -800,8 +827,17 @@ final class CodexService {
             .nilIfEmpty
     }
 
+    var shouldUseDirectRelayTransport: Bool {
+        relayTransportMode == .directAppServer
+    }
+
     var normalizedLocalBridgeServerURL: String? {
-        localBridgeServerURL?
+        #if os(macOS)
+        guard macConnectionTarget == .localThisMac else {
+            return nil
+        }
+        #endif
+        return localBridgeServerURL?
             .trimmingCharacters(in: .whitespacesAndNewlines)
             .nilIfEmpty
     }

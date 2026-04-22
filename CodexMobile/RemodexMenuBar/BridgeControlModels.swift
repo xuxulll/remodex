@@ -76,6 +76,7 @@ struct BridgePairingPayload: Codable, Equatable {
     let macDeviceId: String
     let macIdentityPublicKey: String
     let expiresAt: Int64
+    let transport: String?
 }
 
 struct BridgeTrustedState: Codable, Equatable {

@@ -161,6 +161,7 @@ extension CodexService {
         hasPresentedServiceTierBridgeUpdatePrompt = false
         supportsBridgeVoiceAuth = true
         supportsThreadFork = true
+        supportsBridgeSettingsRead = true
         hasPresentedThreadForkBridgeUpdatePrompt = false
         hasPresentedMinimumBridgePackageUpdatePrompt = false
         lastPresentedAvailableBridgePackageVersion = nil
@@ -179,6 +180,9 @@ extension CodexService {
         hasResolvedRateLimitsSnapshot = false
         bridgeInstalledVersion = nil
         latestBridgePackageVersion = nil
+        bridgeSettingsSnapshot = nil
+        isLoadingBridgeSettingsSnapshot = false
+        bridgeSettingsErrorMessage = nil
         clearConnectionSyncState()
         clearHydrationCaches()
         resumedThreadIDs.removeAll()
@@ -196,6 +200,14 @@ extension CodexService {
 
     // Uses plaintext JSON-RPC only for the exact local app-server endpoint hosted by macOS Remodex.
     func shouldBypassSecureTransport(for serverURL: String) -> Bool {
+        if shouldUseDirectRelayTransport,
+           let relayURL = normalizedRelayURL,
+           let relay = URL(string: relayURL),
+           let target = URL(string: serverURL),
+           canonicalServerIdentity(for: relay) == canonicalServerIdentity(for: target) {
+            return true
+        }
+
         guard let localURL = normalizedLocalBridgeServerURL,
               let local = URL(string: localURL),
               let target = URL(string: serverURL) else {
@@ -232,12 +244,14 @@ extension CodexService {
     func clearSavedRelaySession() {
         SecureStore.deleteValue(for: CodexSecureKeys.relaySessionId)
         SecureStore.deleteValue(for: CodexSecureKeys.relayUrl)
+        SecureStore.deleteValue(for: CodexSecureKeys.relayTransportMode)
         SecureStore.deleteValue(for: CodexSecureKeys.relayMacDeviceId)
         SecureStore.deleteValue(for: CodexSecureKeys.relayMacIdentityPublicKey)
         SecureStore.deleteValue(for: CodexSecureKeys.relayProtocolVersion)
         SecureStore.deleteValue(for: CodexSecureKeys.relayLastAppliedBridgeOutboundSeq)
         relaySessionId = nil
         relayUrl = nil
+        relayTransportMode = .secureRelay
         relayMacDeviceId = nil
         relayMacIdentityPublicKey = nil
         relayProtocolVersion = codexSecureProtocolVersion
@@ -532,6 +546,7 @@ extension CodexService {
         hasPresentedServiceTierBridgeUpdatePrompt = false
         supportsBridgeVoiceAuth = true
         supportsThreadFork = true
+        supportsBridgeSettingsRead = true
         hasPresentedThreadForkBridgeUpdatePrompt = false
         hasPresentedMinimumBridgePackageUpdatePrompt = false
         lastPresentedAvailableBridgePackageVersion = nil
@@ -548,6 +563,9 @@ extension CodexService {
         supportsTurnCollaborationMode = false
         bridgeInstalledVersion = nil
         latestBridgePackageVersion = nil
+        bridgeSettingsSnapshot = nil
+        isLoadingBridgeSettingsSnapshot = false
+        bridgeSettingsErrorMessage = nil
         resumedThreadIDs.removeAll()
         clearHydrationCaches()
         resetSecureTransportState()

@@ -50,7 +50,12 @@ final class ContentViewModel {
     func connectToRelay(pairingPayload: CodexPairingQRPayload, codex: CodexService) async {
         await stopAutoReconnectForManualScan(codex: codex)
         // Avoid logging live pairing metadata; the relay URL path includes a bearer-like session id.
-        let fullURL = "\(pairingPayload.relay)/\(pairingPayload.sessionId)"
+        let fullURL: String
+        if pairingPayload.transport == .directAppServer {
+            fullURL = pairingPayload.relay
+        } else {
+            fullURL = "\(pairingPayload.relay)/\(pairingPayload.sessionId)"
+        }
         codex.rememberRelayPairing(pairingPayload)
 
         do {
@@ -405,6 +410,11 @@ extension ContentViewModel {
             return localBridgeURL
         }
 
+        if codex.shouldUseDirectRelayTransport,
+           let relayURL = codex.normalizedRelayURL {
+            return relayURL
+        }
+
         switch await trustedReconnectResolution(codex: codex) {
         case .use(let resolvedURL):
             return resolvedURL
@@ -485,8 +495,13 @@ extension ContentViewModel {
 
     // Reuses the last QR-resolved session when trusted lookup is unavailable or not yet supported end-to-end.
     private func savedReconnectURL(codex: CodexService) -> String? {
-        guard let sessionId = codex.normalizedRelaySessionId,
-              let relayURL = codex.normalizedRelayURL else {
+        guard let relayURL = codex.normalizedRelayURL else {
+            return nil
+        }
+        if codex.shouldUseDirectRelayTransport {
+            return relayURL
+        }
+        guard let sessionId = codex.normalizedRelaySessionId else {
             return nil
         }
         return "\(relayURL)/\(sessionId)"
