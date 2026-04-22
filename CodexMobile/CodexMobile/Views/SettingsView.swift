@@ -426,9 +426,10 @@ struct SettingsView: View {
                     guard isLikelyDirectSessionCode(code) else {
                         throw error
                     }
+                    let directRelayURL = normalizedDirectAppServerRelayURL(from: relayURL)
                     pairingPayload = CodexPairingQRPayload(
                         v: codexPairingQRVersion,
-                        relay: relayURL,
+                        relay: directRelayURL,
                         sessionId: code,
                         macDeviceId: "remote-mac",
                         macIdentityPublicKey: "",
@@ -443,6 +444,7 @@ struct SettingsView: View {
                     connectURL = "\(pairingPayload.relay)/\(pairingPayload.sessionId)"
                 }
 
+                codex.setMacConnectionTarget(.remoteMacBridge)
                 await codex.disconnect(preserveReconnectIntent: false)
                 codex.rememberRelayPairing(pairingPayload)
                 try await codex.connect(
@@ -450,6 +452,7 @@ struct SettingsView: View {
                     token: "",
                     role: "desktop"
                 )
+                await codex.refreshBridgeSettingsSnapshot()
                 remotePairingCodeDraft = ""
                 remotePairingErrorMessage = nil
             } catch {
@@ -484,10 +487,28 @@ struct SettingsView: View {
         if UUID(uuidString: trimmed) != nil {
             return true
         }
-        if normalized.range(of: "^[ABCDEFGHJKLMNPQRSTUVWXYZ23456789]{8,12}$", options: .regularExpression) != nil {
+        if trimmed.range(
+            of: "^[ABCDEFGHJKLMNPQRSTUVWXYZ23456789]{4}-[ABCDEFGHJKLMNPQRSTUVWXYZ23456789]{4}$",
+            options: .regularExpression
+        ) != nil {
             return true
         }
-        return normalized.count >= 16
+        if normalized.range(of: "^[ABCDEFGHJKLMNPQRSTUVWXYZ23456789]{8}$", options: .regularExpression) != nil {
+            return true
+        }
+        return false
+    }
+
+    private func normalizedDirectAppServerRelayURL(from relayURL: String) -> String {
+        guard var components = URLComponents(string: relayURL),
+              components.host != nil else {
+            return relayURL
+        }
+
+        components.path = ""
+        components.query = nil
+        components.fragment = nil
+        return components.string ?? relayURL
     }
     #endif
 

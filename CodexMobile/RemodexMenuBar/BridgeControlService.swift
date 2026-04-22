@@ -9,6 +9,8 @@ import Darwin
 import Foundation
 import Security
 
+private let nativeBridgePort = 9010
+
 enum BridgeControlError: LocalizedError {
     case commandFailed(command: String, message: String)
     case invalidSnapshot(String)
@@ -164,7 +166,7 @@ private final class NativeBridgeStateStore: BridgeStatePersisting {
             launchdLoaded: false,
             launchdPid: nil,
             daemonConfig: BridgeDaemonConfig(
-                relayUrl: "ws://localhost:9000/relay",
+                relayUrl: "ws://localhost:\(nativeBridgePort)/relay",
                 pushServiceUrl: nil,
                 codexEndpoint: nil,
                 refreshEnabled: true
@@ -297,7 +299,7 @@ private final class NativeSecureChannelService: SecureTransporting {
 }
 
 private final class NativeCodexRuntimeHost: CodexHosting {
-    private static let localAppServerListenURL = "ws://0.0.0.0:9000"
+    private static let localAppServerListenURL = "ws://0.0.0.0:\(nativeBridgePort)"
     private let runner: ShellCommandRunner
     private let stateStore: NativeBridgeStateStore
     private let callbackQueue = DispatchQueue(label: "bridgecore.codex.stream", qos: .utility)
@@ -315,6 +317,10 @@ private final class NativeCodexRuntimeHost: CodexHosting {
             return BridgeRuntimeProcessState(processIdentifier: Int(process.processIdentifier), startedAt: Date())
         }
 
+        if let persistedPID = persistedRuntimePID(), isProcessAlive(pid: persistedPID) {
+            return BridgeRuntimeProcessState(processIdentifier: Int(persistedPID), startedAt: Date())
+        }
+
         let codexPath = try await resolveCodexPath()
         let snapshot = try stateStore.readSnapshot()
         let stdoutURL = URL(fileURLWithPath: snapshot.stdoutLogPath)
@@ -330,9 +336,6 @@ private final class NativeCodexRuntimeHost: CodexHosting {
         nextProcess.environment = launchEnvironment
         nextProcess.standardOutput = stdout
         nextProcess.standardError = stderr
-        nextProcess.terminationHandler = { [weak self] _ in
-            self?.process = nil
-        }
 
         try nextProcess.run()
         process = nextProcess
@@ -343,18 +346,24 @@ private final class NativeCodexRuntimeHost: CodexHosting {
     }
 
     func shutdown() async {
-        guard let process else {
-            return
+        shutdownSynchronously()
+    }
+
+    func shutdownSynchronously() {
+        let activeProcess = process
+        if let activeProcess, activeProcess.isRunning {
+            activeProcess.terminate()
+            activeProcess.waitUntilExit()
+        } else if let persistedPID = persistedRuntimePID() {
+            terminateProcessTreeIfNeeded(pid: persistedPID)
         }
-        if process.isRunning {
-            process.terminate()
-            process.waitUntilExit()
-        }
+
         try? stdoutHandle?.close()
         try? stderrHandle?.close()
         stdoutHandle = nil
         stderrHandle = nil
-        self.process = nil
+        process = nil
+        persistStoppedSnapshot()
     }
 
     func sendRPC(_ payload: String) async throws -> String {
@@ -416,6 +425,71 @@ private final class NativeCodexRuntimeHost: CodexHosting {
         )
     }
 
+    private func persistedRuntimePID() -> Int32? {
+        guard let snapshot = try? stateStore.readSnapshot(),
+              snapshot.launchdLoaded,
+              let persistedPID = snapshot.launchdPid,
+              persistedPID > 0 else {
+            return nil
+        }
+        return Int32(persistedPID)
+    }
+
+    private func terminateProcessTreeIfNeeded(pid: Int32) {
+        guard isProcessAlive(pid: pid) else {
+            return
+        }
+
+        _ = kill(pid, SIGTERM)
+        for _ in 0..<10 where isProcessAlive(pid: pid) {
+            usleep(100_000)
+        }
+
+        if isProcessAlive(pid: pid) {
+            _ = kill(pid, SIGKILL)
+        }
+    }
+
+    private func isProcessAlive(pid: Int32) -> Bool {
+        if kill(pid, 0) == 0 {
+            return true
+        }
+        return errno == EPERM
+    }
+
+    private func persistStoppedSnapshot() {
+        guard let snapshot = try? stateStore.readSnapshot() else {
+            return
+        }
+
+        let next = BridgeSnapshot(
+            currentVersion: snapshot.currentVersion,
+            label: snapshot.label,
+            platform: snapshot.platform,
+            installed: snapshot.installed,
+            launchdLoaded: false,
+            launchdPid: nil,
+            daemonConfig: snapshot.daemonConfig,
+            bridgeStatus: BridgeRuntimeStatus(
+                state: "stopped",
+                connectionStatus: "idle",
+                pid: nil,
+                lastError: nil,
+                updatedAt: Self.isoTimestamp()
+            ),
+            pairingSession: snapshot.pairingSession,
+            stdoutLogPath: snapshot.stdoutLogPath,
+            stderrLogPath: snapshot.stderrLogPath
+        )
+        try? stateStore.writeSnapshot(next)
+    }
+
+    private static func isoTimestamp(_ date: Date = Date()) -> String {
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        return formatter.string(from: date)
+    }
+
     private func ensureLogFile(_ fileURL: URL) -> URL {
         let fileManager = FileManager.default
         let directory = fileURL.deletingLastPathComponent()
@@ -473,7 +547,7 @@ private final class NativeBridgeRuntimeController: BridgeRuntimeControlling {
         _ = try await secureChannel.beginHandshake()
         let trusted = try stateStore.readTrustedState()
         let current = try stateStore.readSnapshot()
-        let configuredRelayURL = current.daemonConfig?.relayUrl ?? "ws://localhost:9000/relay"
+        let configuredRelayURL = current.daemonConfig?.relayUrl ?? "ws://localhost:\(nativeBridgePort)/relay"
         let relayURL = directAppServerPairingURL(from: configuredRelayURL)
         let pairingPayload = pairingService.makePairingPayload(relayURL: relayURL, trustedState: trusted)
 
@@ -516,6 +590,7 @@ private final class NativeBridgeRuntimeController: BridgeRuntimeControlling {
         }
 
         components.path = ""
+        components.port = nativeBridgePort
         components.query = nil
         components.fragment = nil
         return components.string ?? rawRelayURL
@@ -756,6 +831,10 @@ final class BridgeControlService {
                 "npm package update checks are disabled for app-bundled bridge runtime."
             )
         )
+    }
+
+    func forceStopBridgeForTermination() {
+        runtimeHost.shutdownSynchronously()
     }
 }
 

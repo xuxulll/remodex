@@ -4,6 +4,9 @@
 // Exports: CodexMobileApp
 
 import SwiftUI
+#if os(macOS)
+import AppKit
+#endif
 
 @MainActor
 @main
@@ -47,6 +50,13 @@ struct RemodexApp: App {
                 .onChange(of: scenePhase) { _, newPhase in
                     interactionService.handleScenePhaseChange(newPhase)
                 }
+                #if os(macOS)
+                .onReceive(
+                    NotificationCenter.default.publisher(for: NSApplication.willTerminateNotification)
+                ) { _ in
+                    interactionService.handleApplicationWillTerminate()
+                }
+                #endif
         }
 
         #if os(macOS)

@@ -13,6 +13,8 @@ import Security
 // Image-heavy thread history and secure-envelope overhead can legitimately exceed 4 MB while
 // reopening a chat, so the limit needs enough headroom for background `thread/read` catches too.
 let codexWebSocketMaximumMessageSizeBytes = 16 * 1024 * 1024
+private let codexRPCRequestTimeoutSeconds: UInt64 = 20
+private let codexRPCRequestTimeoutNanoseconds = codexRPCRequestTimeoutSeconds * 1_000_000_000
 
 private enum CodexRelayTransportPreference {
     case manualTCP
@@ -84,6 +86,21 @@ extension CodexService {
 
         return try await withCheckedThrowingContinuation { continuation in
             pendingRequests[requestKey] = continuation
+            pendingRequestTimeoutTaskByID[requestKey]?.cancel()
+            pendingRequestTimeoutTaskByID[requestKey] = Task { [weak self] in
+                try? await Task.sleep(nanoseconds: codexRPCRequestTimeoutNanoseconds)
+                guard !Task.isCancelled,
+                      let self,
+                      let pendingContinuation = self.pendingRequests.removeValue(forKey: requestKey) else {
+                    return
+                }
+                self.pendingRequestTimeoutTaskByID.removeValue(forKey: requestKey)
+                pendingContinuation.resume(
+                    throwing: CodexServiceError.invalidInput(
+                        "No response from Mac bridge for \(method) after \(codexRPCRequestTimeoutSeconds)s."
+                    )
+                )
+            }
 
             Task {
                 do {
@@ -97,6 +114,7 @@ extension CodexService {
                     // Avoid double-resume if the request was already completed
                     // (for example by a disconnect race that fails all pending requests).
                     if let pendingContinuation = pendingRequests.removeValue(forKey: requestKey) {
+                        pendingRequestTimeoutTaskByID.removeValue(forKey: requestKey)?.cancel()
                         pendingContinuation.resume(throwing: error)
                     }
                 }
@@ -514,6 +532,12 @@ extension CodexService {
     func failAllPendingRequests(with error: Error) {
         let continuations = pendingRequests
         pendingRequests.removeAll()
+        let timeoutTasks = pendingRequestTimeoutTaskByID.values
+        pendingRequestTimeoutTaskByID.removeAll()
+
+        for timeoutTask in timeoutTasks {
+            timeoutTask.cancel()
+        }
 
         for continuation in continuations.values {
             continuation.resume(throwing: error)

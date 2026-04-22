@@ -197,8 +197,8 @@ enum BridgeCLIAvailability: Equatable {
 
 extension BridgeSnapshot {
     var effectiveRelayURL: String {
-        daemonConfig?.relayUrl?.nonEmptyTrimmed
-        ?? pairingSession?.pairingPayload?.relay.nonEmptyTrimmed
+        pairingSession?.pairingPayload?.relay.nonEmptyTrimmed
+        ?? daemonConfig?.relayUrl?.nonEmptyTrimmed
         ?? ""
     }
 

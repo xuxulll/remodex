@@ -448,6 +448,7 @@ final class CodexService {
     var usesManualWebSocketTransport = false
     let webSocketQueue = DispatchQueue(label: "CodexMobile.WebSocket", qos: .userInitiated)
     var pendingRequests: [String: CheckedContinuation<RPCMessage, Error>] = [:]
+    var pendingRequestTimeoutTaskByID: [String: Task<Void, Never>] = [:]
     // Test hook: intercepts outbound RPC requests without requiring a live socket.
     @ObservationIgnored var requestTransportOverride: ((String, JSONValue?) async throws -> RPCMessage)?
     // Test hook: stubs trusted-session lookup without performing a real relay HTTP request.

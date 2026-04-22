@@ -34,16 +34,23 @@ final class RemodexInteractionService {
         }
         TurnCacheManager.resetAll()
     }
+
+    #if os(macOS)
+    func handleApplicationWillTerminate() {
+        macBridgeRuntime.stopForTermination()
+    }
+    #endif
 }
 
 #if os(macOS)
-actor RemodexMacBridgeRuntime {
-    static let localBridgeWebSocketURL = "ws://127.0.0.1:9000/"
+@MainActor
+final class RemodexMacBridgeRuntime {
+    static let localBridgeWebSocketURL = "ws://127.0.0.1:9010/"
+    private let bridgeControlService = BridgeControlService()
 
     // Boots the native macOS bridge host so the app can connect directly as a local client.
     func startIfNeeded() async {
         do {
-            let bridgeControlService = await MainActor.run { BridgeControlService() }
             try await bridgeControlService.startBridge(relayOverride: nil)
         } catch {
             return
@@ -51,8 +58,11 @@ actor RemodexMacBridgeRuntime {
     }
 
     func stopIfNeeded() async {
-        let bridgeControlService = await MainActor.run { BridgeControlService() }
         try? await bridgeControlService.stopBridge(relayOverride: nil)
+    }
+
+    func stopForTermination() {
+        bridgeControlService.forceStopBridgeForTermination()
     }
 }
 #endif

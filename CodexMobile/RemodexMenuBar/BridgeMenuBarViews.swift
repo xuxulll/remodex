@@ -112,7 +112,7 @@ struct BridgeMenuBarContentView: View {
                 .font(.system(size: 11, weight: .regular))
                 .foregroundStyle(.secondary)
 
-            TextField("ws://localhost:9000/relay", text: $relayDraft)
+            TextField("ws://localhost:9010/relay", text: $relayDraft)
                 .textFieldStyle(.plain)
                 .font(.system(size: 12, weight: .regular, design: .monospaced))
                 .padding(.horizontal, 12)
