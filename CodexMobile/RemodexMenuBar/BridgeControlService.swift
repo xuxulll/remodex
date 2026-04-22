@@ -300,6 +300,9 @@ private final class NativeSecureChannelService: SecureTransporting {
 
 private final class NativeCodexRuntimeHost: CodexHosting {
     private static let localAppServerListenURL = "ws://0.0.0.0:\(nativeBridgePort)"
+    private static let localAppServerReadyURL = URL(string: "http://127.0.0.1:\(nativeBridgePort)/readyz")
+    private static let startupTimeoutNanoseconds: UInt64 = 8_000_000_000
+    private static let startupPollIntervalNanoseconds: UInt64 = 200_000_000
     private let runner: ShellCommandRunner
     private let stateStore: NativeBridgeStateStore
     private let callbackQueue = DispatchQueue(label: "bridgecore.codex.stream", qos: .utility)
@@ -314,12 +317,19 @@ private final class NativeCodexRuntimeHost: CodexHosting {
 
     func launch() async throws -> BridgeRuntimeProcessState {
         if let process, process.isRunning {
-            return BridgeRuntimeProcessState(processIdentifier: Int(process.processIdentifier), startedAt: Date())
+            if await isReadyEndpointReachable() {
+                return BridgeRuntimeProcessState(processIdentifier: Int(process.processIdentifier), startedAt: Date())
+            }
+
+            terminateProcessTreeIfNeeded(pid: process.processIdentifier)
+            self.process = nil
         }
 
         if let persistedPID = persistedRuntimePID(), isProcessAlive(pid: persistedPID) {
-            return BridgeRuntimeProcessState(processIdentifier: Int(persistedPID), startedAt: Date())
+            terminateProcessTreeIfNeeded(pid: persistedPID)
         }
+
+        await terminatePortListeners(excluding: [])
 
         let codexPath = try await resolveCodexPath()
         let snapshot = try stateStore.readSnapshot()
@@ -342,6 +352,18 @@ private final class NativeCodexRuntimeHost: CodexHosting {
         stdoutHandle = stdout
         stderrHandle = stderr
 
+        do {
+            try await waitUntilRuntimeReady(process: nextProcess, stderrURL: stderrURL)
+        } catch {
+            terminateProcessTreeIfNeeded(pid: nextProcess.processIdentifier)
+            try? stdout.close()
+            try? stderr.close()
+            stdoutHandle = nil
+            stderrHandle = nil
+            process = nil
+            throw error
+        }
+
         return BridgeRuntimeProcessState(processIdentifier: Int(nextProcess.processIdentifier), startedAt: Date())
     }
 
@@ -357,6 +379,7 @@ private final class NativeCodexRuntimeHost: CodexHosting {
         } else if let persistedPID = persistedRuntimePID() {
             terminateProcessTreeIfNeeded(pid: persistedPID)
         }
+        terminatePortListenersSynchronously(excluding: [])
 
         try? stdoutHandle?.close()
         try? stderrHandle?.close()
@@ -455,6 +478,132 @@ private final class NativeCodexRuntimeHost: CodexHosting {
             return true
         }
         return errno == EPERM
+    }
+
+    private func waitUntilRuntimeReady(process: Process, stderrURL: URL) async throws {
+        let maxAttempts = Int(Self.startupTimeoutNanoseconds / Self.startupPollIntervalNanoseconds)
+        for _ in 0..<maxAttempts {
+            if !process.isRunning {
+                throw startupFailureError(
+                    reason: "Codex app-server exited before it became ready.",
+                    stderrURL: stderrURL
+                )
+            }
+
+            if await isReadyEndpointReachable() {
+                return
+            }
+
+            try? await Task.sleep(nanoseconds: Self.startupPollIntervalNanoseconds)
+        }
+
+        throw startupFailureError(
+            reason: "Timed out waiting for Codex app-server readiness on port \(nativeBridgePort).",
+            stderrURL: stderrURL
+        )
+    }
+
+    private func isReadyEndpointReachable() async -> Bool {
+        guard let readyURL = Self.localAppServerReadyURL else {
+            return false
+        }
+
+        var request = URLRequest(url: readyURL)
+        request.timeoutInterval = 1.0
+
+        do {
+            let (_, response) = try await URLSession.shared.data(for: request)
+            guard let httpResponse = response as? HTTPURLResponse else {
+                return false
+            }
+            return (200...299).contains(httpResponse.statusCode)
+        } catch {
+            return false
+        }
+    }
+
+    private func startupFailureError(reason: String, stderrURL: URL) -> BridgeControlError {
+        let stderrTail = readLogTail(stderrURL)
+        if stderrTail.isEmpty {
+            return .runtimeUnavailable(reason)
+        }
+        return .runtimeUnavailable("\(reason) \(stderrTail)")
+    }
+
+    private func terminatePortListeners(excluding excludedPIDs: Set<Int32>) async {
+        let listeners = await listeningRuntimePIDs()
+        guard !listeners.isEmpty else {
+            return
+        }
+
+        for pid in listeners where !excludedPIDs.contains(pid) {
+            terminateProcessTreeIfNeeded(pid: pid)
+        }
+    }
+
+    private func terminatePortListenersSynchronously(excluding excludedPIDs: Set<Int32>) {
+        let listeners = listeningRuntimePIDSSynchronously()
+        guard !listeners.isEmpty else {
+            return
+        }
+
+        for pid in listeners where !excludedPIDs.contains(pid) {
+            terminateProcessTreeIfNeeded(pid: pid)
+        }
+    }
+
+    private func listeningRuntimePIDs() async -> [Int32] {
+        let command = "lsof -nP -t -iTCP:\(nativeBridgePort) -sTCP:LISTEN || true"
+        guard let result = try? await runner.run(command: command) else {
+            return []
+        }
+        return parsePIDs(from: result.stdout)
+    }
+
+    private func listeningRuntimePIDSSynchronously() -> [Int32] {
+        let process = Process()
+        let outputPipe = Pipe()
+        process.executableURL = URL(fileURLWithPath: "/bin/zsh")
+        process.arguments = ["-lc", "lsof -nP -t -iTCP:\(nativeBridgePort) -sTCP:LISTEN || true"]
+        process.standardOutput = outputPipe
+        process.standardError = Pipe()
+
+        do {
+            try process.run()
+            process.waitUntilExit()
+            let data = outputPipe.fileHandleForReading.readDataToEndOfFile()
+            let output = String(data: data, encoding: .utf8) ?? ""
+            return parsePIDs(from: output)
+        } catch {
+            return []
+        }
+    }
+
+    private func parsePIDs(from output: String) -> [Int32] {
+        let values = output
+            .split(whereSeparator: \.isNewline)
+            .compactMap { Int32($0.trimmingCharacters(in: .whitespacesAndNewlines)) }
+            .filter { $0 > 0 }
+        return Array(Set(values))
+    }
+
+    private func readLogTail(_ fileURL: URL, maxCharacters: Int = 1_000) -> String {
+        guard let data = try? Data(contentsOf: fileURL),
+              let text = String(data: data, encoding: .utf8) else {
+            return ""
+        }
+
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else {
+            return ""
+        }
+
+        if trimmed.count <= maxCharacters {
+            return "Last runtime log: \(trimmed)"
+        }
+
+        let suffix = String(trimmed.suffix(maxCharacters))
+        return "Last runtime log: \(suffix)"
     }
 
     private func persistStoppedSnapshot() {
