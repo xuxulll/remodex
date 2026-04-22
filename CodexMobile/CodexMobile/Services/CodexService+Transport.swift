@@ -365,7 +365,12 @@ extension CodexService {
         codexLogPairingTransport("opening manual TCP websocket")
         try await waitUntilManualConnectionReady(connection, configuration: waitConfiguration)
         do {
-            try await performManualWebSocketHandshake(on: connection, url: url, token: token, role: role)
+            try await runWithTimeout(
+                timeoutNanoseconds: 8_000_000_000,
+                timeoutMessage: "Connection timed out after 8s waiting for websocket upgrade response."
+            ) {
+                try await self.performManualWebSocketHandshake(on: connection, url: url, token: token, role: role)
+            }
             codexLogPairingTransport("manual TCP websocket connected")
         } catch {
             connection.cancel()
@@ -676,7 +681,34 @@ extension CodexService {
     }
 
     private func relayTransportPreference(for url: URL) -> CodexRelayTransportPreference {
+        #if os(macOS)
+        return .networkWebSocket
+        #else
         prefersDirectRelayTransport(for: url) ? .manualTCP : .networkWebSocket
+        #endif
+    }
+
+    private func runWithTimeout<ResultValue>(
+        timeoutNanoseconds: UInt64,
+        timeoutMessage: String,
+        operation: @escaping @Sendable () async throws -> ResultValue
+    ) async throws -> ResultValue {
+        try await withThrowingTaskGroup(of: ResultValue.self) { group in
+            group.addTask {
+                try await operation()
+            }
+            group.addTask {
+                try await Task.sleep(nanoseconds: timeoutNanoseconds)
+                throw CodexServiceError.invalidInput(timeoutMessage)
+            }
+
+            guard let firstResult = try await group.next() else {
+                throw CodexServiceError.invalidInput(timeoutMessage)
+            }
+
+            group.cancelAll()
+            return firstResult
+        }
     }
 
     private func manualWebSocketEndpoint(from url: URL) throws -> CodexManualWebSocketEndpoint {
