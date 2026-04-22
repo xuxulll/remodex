@@ -494,7 +494,8 @@ private final class NativeBridgeRuntimeController: BridgeRuntimeControlling {
             ),
             pairingSession: BridgePairingSession(
                 createdAt: Self.isoTimestamp(),
-                pairingPayload: pairingPayload
+                pairingPayload: pairingPayload,
+                pairingCode: shortPairingCode(from: trusted.relaySessionId)
             ),
             stdoutLogPath: current.stdoutLogPath,
             stderrLogPath: current.stderrLogPath
@@ -652,6 +653,20 @@ private final class NativeBridgeRuntimeController: BridgeRuntimeControlling {
         let formatter = ISO8601DateFormatter()
         formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
         return formatter.string(from: date)
+    }
+
+    // Generates a stable human-friendly code from the current relay session id.
+    private func shortPairingCode(from sessionID: String) -> String {
+        let alphabet = Array("ABCDEFGHJKLMNPQRSTUVWXYZ23456789")
+        let digest = SHA256.hash(data: Data(sessionID.utf8))
+        let bytes = Array(digest)
+        let code = String((0..<8).map { index in
+            let byte = bytes[index % bytes.count]
+            return alphabet[Int(byte) % alphabet.count]
+        })
+        let first = code.prefix(4)
+        let second = code.suffix(4)
+        return "\(first)-\(second)"
     }
 }
 

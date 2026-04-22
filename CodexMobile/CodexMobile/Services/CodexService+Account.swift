@@ -5,6 +5,9 @@
 // Depends on: Foundation, RPCMessage, JSONValue
 
 import Foundation
+#if os(iOS)
+import UIKit
+#endif
 
 private let minimumBridgePackageUpdateCommand = "npm install -g remodex@latest"
 private let forcedBridgeUpgradeFromVersion = "1.3.7"
@@ -134,6 +137,8 @@ struct CodexGPTLoginStartResult: Equatable, Sendable {
 
 struct CodexBridgeConnectedClient: Equatable, Sendable {
     let clientDeviceId: String
+    let clientType: CodexSecureClientType?
+    let clientName: String?
     let keyEpoch: Int
     let isResumed: Bool
 }
@@ -1009,6 +1014,9 @@ extension CodexService {
             let isResumed = firstBoolValue(in: clientObject, keys: ["isResumed", "is_resumed"]) ?? false
             return CodexBridgeConnectedClient(
                 clientDeviceId: clientDeviceId,
+                clientType: firstStringValue(in: clientObject, keys: ["clientType", "client_type"])
+                    .flatMap(CodexSecureClientType.init(rawValue:)),
+                clientName: firstStringValue(in: clientObject, keys: ["clientName", "client_name"]),
                 keyEpoch: keyEpoch,
                 isResumed: isResumed
             )
@@ -1118,8 +1126,14 @@ extension CodexService {
         }
 
         let pairedIDs = trustedState.trustedPhoneDeviceID.map { [$0] } ?? []
+        let localClientType = localBridgeClientType()
         let connectedClients = isConnected ? [CodexBridgeConnectedClient(
             clientDeviceId: phoneIdentityState.phoneDeviceId,
+            clientType: localClientType,
+            clientName: legacyConnectedClientName(
+                clientType: localClientType,
+                clientDeviceId: phoneIdentityState.phoneDeviceId
+            ),
             keyEpoch: secureSession?.keyEpoch ?? 0,
             isResumed: true
         )] : []
@@ -1128,7 +1142,7 @@ extension CodexService {
             relayURL: normalizedNonEmptyString(snapshot.effectiveRelayURL),
             relaySessionId: pairingPayload?.sessionId ?? trustedState.relaySessionId,
             pairingPayload: pairingPayload,
-            pairingCode: nil,
+            pairingCode: snapshot.pairingSession?.pairingCode,
             bridgeState: snapshot.bridgeStatus?.state,
             bridgeConnectionStatus: snapshot.bridgeStatus?.connectionStatus,
             pairedClientDeviceIds: pairedIDs,
@@ -1150,8 +1164,14 @@ extension CodexService {
     private func legacyBridgeSettingsSnapshot() -> CodexBridgeSettingsSnapshot {
         let relayURL = normalizedRelayURL ?? normalizedLocalBridgeServerURL
         let keyEpoch = secureSession?.keyEpoch ?? 0
+        let localClientType = localBridgeClientType()
         let client = isConnected ? CodexBridgeConnectedClient(
             clientDeviceId: phoneIdentityState.phoneDeviceId,
+            clientType: localClientType,
+            clientName: legacyConnectedClientName(
+                clientType: localClientType,
+                clientDeviceId: phoneIdentityState.phoneDeviceId
+            ),
             keyEpoch: keyEpoch,
             isResumed: true
         ) : nil
@@ -1208,6 +1228,35 @@ extension CodexService {
 
     private func unsupportedBridgeSettingsMessage() -> String {
         "This Mac runtime does not support bridge access details yet. Update Remodex on your Mac to view QR and live connected clients."
+    }
+
+    private func legacyConnectedClientName(
+        clientType: CodexSecureClientType,
+        clientDeviceId: String
+    ) -> String {
+        let label: String
+        switch clientType {
+        case .iphone:
+            label = "iPhone"
+        case .ipad:
+            label = "iPad"
+        case .desktop:
+            label = "Mac"
+        }
+        return "\(label) (\(String(clientDeviceId.prefix(8))))"
+    }
+
+    private func localBridgeClientType() -> CodexSecureClientType {
+        #if os(macOS)
+        return .desktop
+        #else
+        #if os(iOS)
+        if UIDevice.current.userInterfaceIdiom == .pad {
+            return .ipad
+        }
+        #endif
+        return .iphone
+        #endif
     }
 
     func decodeGPTLoginStartResult(from response: RPCMessage) throws -> CodexGPTLoginStartResult {

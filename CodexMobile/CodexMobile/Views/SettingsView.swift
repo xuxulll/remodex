@@ -18,6 +18,10 @@ struct SettingsView: View {
 
     @AppStorage("codex.appFontStyle") private var appFontStyleRawValue = AppFont.defaultStoredStyleRawValue
     @State private var isShowingMacNameSheet = false
+    @State private var remoteRelayAddressDraft = ""
+    @State private var remotePairingCodeDraft = ""
+    @State private var isConnectingRemoteBridge = false
+    @State private var remotePairingErrorMessage: String?
 
     private let runtimeAutoValue = "__AUTO__"
     private let runtimeNormalValue = "__NORMAL__"
@@ -216,6 +220,11 @@ struct SettingsView: View {
                 .labelsHidden()
                 .tint(settingsAccentColor)
             }
+
+            if codex.macConnectionTarget == .remoteMacBridge {
+                Divider()
+                remoteBridgePairingSection
+            }
             #endif
 
             if !trustedDeviceRows.isEmpty {
@@ -286,7 +295,14 @@ struct SettingsView: View {
     private var macConnectionTargetSelection: Binding<CodexMacConnectionTarget> {
         Binding(
             get: { codex.macConnectionTarget },
-            set: { codex.setMacConnectionTarget($0) }
+            set: { newTarget in
+                codex.setMacConnectionTarget(newTarget)
+                remotePairingErrorMessage = nil
+                if newTarget == .remoteMacBridge,
+                   remoteRelayAddressDraft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                    remoteRelayAddressDraft = codex.normalizedRelayURL ?? ""
+                }
+            }
         )
     }
 
@@ -312,6 +328,168 @@ struct SettingsView: View {
         }
         .padding(.vertical, 4)
     }
+
+    #if os(macOS)
+    @ViewBuilder
+    private var remoteBridgePairingSection: some View {
+        Text("Remote Bridge Pairing")
+            .font(AppFont.caption(weight: .semibold))
+            .foregroundStyle(.secondary)
+
+        TextField("Relay address (ws://host:port)", text: $remoteRelayAddressDraft)
+            .textFieldStyle(.roundedBorder)
+            .font(AppFont.mono(.caption))
+            .disabled(isConnectingRemoteBridge)
+
+        TextField("Enter pairing code", text: $remotePairingCodeDraft)
+            .textFieldStyle(.roundedBorder)
+            .font(AppFont.mono(.caption))
+            .disabled(isConnectingRemoteBridge)
+
+        HStack(spacing: 8) {
+            SettingsButton("Paste Code") {
+                pasteRemotePairingCodeFromClipboard()
+            }
+            .opacity(isConnectingRemoteBridge ? 0.5 : 1)
+            .disabled(isConnectingRemoteBridge)
+
+            SettingsButton("Paste Relay") {
+                pasteRemoteRelayAddressFromClipboard()
+            }
+            .opacity(isConnectingRemoteBridge ? 0.5 : 1)
+            .disabled(isConnectingRemoteBridge)
+
+            SettingsButton("Connect", isLoading: isConnectingRemoteBridge) {
+                connectToRemoteBridgeWithPairingCode()
+            }
+        }
+
+        if let error = remotePairingErrorMessage,
+           !error.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            Text(error)
+                .font(AppFont.caption())
+                .foregroundStyle(.orange)
+        } else {
+            Text("Enter both relay address:port and pair code from the target Mac bridge.")
+                .font(AppFont.caption())
+                .foregroundStyle(.secondary)
+        }
+    }
+
+    private func pasteRemotePairingCodeFromClipboard() {
+        let clipboard = NSPasteboard.general.string(forType: .string)?
+            .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        guard !clipboard.isEmpty else {
+            return
+        }
+        remotePairingCodeDraft = clipboard
+    }
+
+    private func pasteRemoteRelayAddressFromClipboard() {
+        let clipboard = NSPasteboard.general.string(forType: .string)?
+            .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        guard !clipboard.isEmpty else {
+            return
+        }
+        remoteRelayAddressDraft = clipboard
+    }
+
+    private func connectToRemoteBridgeWithPairingCode() {
+        guard !isConnectingRemoteBridge else {
+            return
+        }
+
+        let code = remotePairingCodeDraft.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !code.isEmpty else {
+            remotePairingErrorMessage = "Enter a valid pairing code."
+            return
+        }
+        guard let relayURL = normalizedRemoteRelayURL(from: remoteRelayAddressDraft) else {
+            remotePairingErrorMessage = "Enter a valid relay address including port."
+            return
+        }
+
+        isConnectingRemoteBridge = true
+        remotePairingErrorMessage = nil
+
+        Task { @MainActor in
+            defer { isConnectingRemoteBridge = false }
+
+            do {
+                let pairingPayload: CodexPairingQRPayload
+                do {
+                    pairingPayload = try await codex.resolvePairingCode(
+                        code,
+                        relayURLOverride: relayURL
+                    )
+                } catch {
+                    guard isLikelyDirectSessionCode(code) else {
+                        throw error
+                    }
+                    pairingPayload = CodexPairingQRPayload(
+                        v: codexPairingQRVersion,
+                        relay: relayURL,
+                        sessionId: code,
+                        macDeviceId: "remote-mac",
+                        macIdentityPublicKey: "",
+                        expiresAt: Int64(Date().timeIntervalSince1970 * 1000) + (5 * 60 * 1000),
+                        transport: .directAppServer
+                    )
+                }
+                let connectURL: String
+                if pairingPayload.transport == .directAppServer {
+                    connectURL = pairingPayload.relay
+                } else {
+                    connectURL = "\(pairingPayload.relay)/\(pairingPayload.sessionId)"
+                }
+
+                await codex.disconnect(preserveReconnectIntent: false)
+                codex.rememberRelayPairing(pairingPayload)
+                try await codex.connect(
+                    serverURL: connectURL,
+                    token: "",
+                    role: "desktop"
+                )
+                remotePairingCodeDraft = ""
+                remotePairingErrorMessage = nil
+            } catch {
+                remotePairingErrorMessage = error.localizedDescription
+            }
+        }
+    }
+
+    private func normalizedRemoteRelayURL(from rawValue: String) -> String? {
+        let trimmed = rawValue.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return nil }
+
+        let withScheme = trimmed.contains("://") ? trimmed : "ws://\(trimmed)"
+        guard var components = URLComponents(string: withScheme),
+              let host = components.host?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !host.isEmpty,
+              components.port != nil else {
+            return nil
+        }
+
+        components.path = ""
+        components.query = nil
+        components.fragment = nil
+        return components.string
+    }
+
+    private func isLikelyDirectSessionCode(_ rawCode: String) -> Bool {
+        let trimmed = rawCode.trimmingCharacters(in: .whitespacesAndNewlines).uppercased()
+        let normalized = trimmed
+            .replacingOccurrences(of: "-", with: "")
+            .replacingOccurrences(of: " ", with: "")
+        if UUID(uuidString: trimmed) != nil {
+            return true
+        }
+        if normalized.range(of: "^[ABCDEFGHJKLMNPQRSTUVWXYZ23456789]{8,12}$", options: .regularExpression) != nil {
+            return true
+        }
+        return normalized.count >= 16
+    }
+    #endif
 
     // MARK: - Runtime bindings
 
@@ -692,11 +870,19 @@ private struct SettingsBridgeAccessCard: View {
 
     @ViewBuilder
     private func connectedClientRow(_ client: CodexBridgeConnectedClient) -> some View {
+        let normalizedClientName = client.clientName?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let displayName = normalizedClientName?.isEmpty == false
+            ? (normalizedClientName ?? client.clientDeviceId)
+            : client.clientDeviceId
         HStack(spacing: 10) {
             VStack(alignment: .leading, spacing: 2) {
+                Text(displayName)
+                    .font(AppFont.subheadline(weight: .semibold))
+                    .foregroundStyle(.primary)
+                    .lineLimit(1)
                 Text(client.clientDeviceId)
                     .font(AppFont.mono(.caption))
-                    .foregroundStyle(.primary)
+                    .foregroundStyle(.secondary)
                     .lineLimit(1)
                 Text("Key epoch \(client.keyEpoch)")
                     .font(AppFont.caption())

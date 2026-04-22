@@ -29,6 +29,9 @@ const HANDSHAKE_MODE_QR_BOOTSTRAP = "qr_bootstrap";
 const HANDSHAKE_MODE_TRUSTED_RECONNECT = "trusted_reconnect";
 const SECURE_SENDER_MAC = "mac";
 const SECURE_SENDER_IPHONE = "iphone";
+const CLIENT_TYPE_IPHONE = "iphone";
+const CLIENT_TYPE_IPAD = "ipad";
+const CLIENT_TYPE_DESKTOP = "desktop";
 const MAX_PAIRING_AGE_MS = 5 * 60 * 1000;
 const MAX_BRIDGE_OUTBOUND_MESSAGES = 500;
 const MAX_BRIDGE_OUTBOUND_BYTES = 10 * 1024 * 1024;
@@ -139,6 +142,7 @@ function createBridgeSecureTransport({
     const handshakeMode = normalizeNonEmptyString(message.handshakeMode);
     const phoneDeviceId = normalizeNonEmptyString(message.phoneDeviceId);
     const phoneIdentityPublicKey = normalizeNonEmptyString(message.phoneIdentityPublicKey);
+    const clientType = normalizeClientType(message.clientType);
     const phoneEphemeralPublicKey = normalizeNonEmptyString(message.phoneEphemeralPublicKey);
     const clientNonceBase64 = normalizeNonEmptyString(message.clientNonce);
 
@@ -243,6 +247,7 @@ function createBridgeSecureTransport({
       keyEpoch,
       phoneDeviceId,
       phoneIdentityPublicKey,
+      clientType,
       phoneEphemeralPublicKey,
       macEphemeralPrivateKey: base64UrlToBase64(privateJwk.d),
       macEphemeralPublicKey: base64UrlToBase64(publicJwk.x),
@@ -345,6 +350,7 @@ function createBridgeSecureTransport({
       keyEpoch: pendingHandshake.keyEpoch,
       phoneDeviceId: pendingHandshake.phoneDeviceId,
       phoneIdentityPublicKey: pendingHandshake.phoneIdentityPublicKey,
+      clientType: pendingHandshake.clientType,
       phoneToMacKey: deriveAesKey(sharedSecret, salt, `${infoPrefix}|phoneToMac`),
       macToPhoneKey: deriveAesKey(sharedSecret, salt, `${infoPrefix}|macToPhone`),
       lastInboundCounter: -1,
@@ -548,6 +554,8 @@ function createBridgeSecureTransport({
     return Array.from(activeSessionsByPhoneDeviceId.values())
       .map((session) => ({
         clientDeviceId: session.phoneDeviceId,
+        clientType: session.clientType || CLIENT_TYPE_IPHONE,
+        clientName: clientDisplayName(session.clientType, session.phoneDeviceId),
         keyEpoch: session.keyEpoch,
         isResumed: Boolean(session.isResumed),
         lastInboundCounter: session.lastInboundCounter,
@@ -566,6 +574,30 @@ function createBridgeSecureTransport({
     currentClientSessions,
     queueOutboundApplicationMessage,
   };
+}
+
+function normalizeClientType(value) {
+  const normalized = normalizeNonEmptyString(value);
+  if (
+    normalized === CLIENT_TYPE_IPHONE
+    || normalized === CLIENT_TYPE_IPAD
+    || normalized === CLIENT_TYPE_DESKTOP
+  ) {
+    return normalized;
+  }
+  return CLIENT_TYPE_IPHONE;
+}
+
+function clientDisplayName(clientType, clientDeviceId) {
+  const typeLabel = clientType === CLIENT_TYPE_IPAD
+    ? "iPad"
+    : clientType === CLIENT_TYPE_DESKTOP
+      ? "Mac"
+      : "iPhone";
+  const shortDeviceId = normalizeNonEmptyString(clientDeviceId)
+    ? String(clientDeviceId).slice(0, 8)
+    : "unknown";
+  return `${typeLabel} (${shortDeviceId})`;
 }
 
 function debugSecureLog(message) {

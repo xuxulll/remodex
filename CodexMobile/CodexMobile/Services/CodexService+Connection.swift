@@ -1131,6 +1131,10 @@ extension CodexService {
             return false
         }
 
+        if isLikelyProxyFakeIPv4Host(host) {
+            return false
+        }
+
         return host.hasSuffix(".local")
             || isPrivateIPv4Host(host)
             || isCarrierGradePrivateIPv4Host(host)
@@ -1166,6 +1170,21 @@ extension CodexService {
         }
 
         return octets[0] == 100 && (64...127).contains(octets[1])
+    }
+
+    // Matches common FakeIP pools used by modern proxy tools (for example 198.18.0.0/15).
+    // These addresses should go through proxy-aware URLSession transport, not direct LAN heuristics.
+    func isLikelyProxyFakeIPv4Host(_ host: String) -> Bool {
+        let octets = host.split(separator: ".").compactMap { Int($0) }
+        guard octets.count == 4 else {
+            return false
+        }
+
+        if octets[0] == 198 && (18...19).contains(octets[1]) {
+            return true
+        }
+
+        return false
     }
 
     // Covers Tailscale hostnames that still resolve to the local/private overlay even without a raw 100.x QR URL.

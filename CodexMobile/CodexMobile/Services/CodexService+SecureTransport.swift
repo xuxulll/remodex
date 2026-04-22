@@ -57,6 +57,7 @@ extension CodexService {
             handshakeMode: handshakeMode,
             phoneDeviceId: phoneIdentityState.phoneDeviceId,
             phoneIdentityPublicKey: phoneIdentityState.phoneIdentityPublicKey,
+            clientType: secureClientType(),
             phoneEphemeralPublicKey: phoneEphemeralPrivateKey.publicKey.rawRepresentation.base64EncodedString(),
             clientNonce: clientNonce.base64EncodedString()
         )
@@ -392,7 +393,10 @@ extension CodexService {
     }
 
     // Resolves a short manual pairing code through the best-known relay for this app instance.
-    func resolvePairingCode(_ code: String) async throws -> CodexPairingQRPayload {
+    func resolvePairingCode(
+        _ code: String,
+        relayURLOverride: String? = nil
+    ) async throws -> CodexPairingQRPayload {
         let normalizedCode = code
             .trimmingCharacters(in: .whitespacesAndNewlines)
             .uppercased()
@@ -402,7 +406,10 @@ extension CodexService {
             throw CodexSecureTransportError.invalidQR("Enter a valid pairing code.")
         }
 
-        guard let relayURL = preferredPairingCodeRelayURL,
+        let normalizedRelayOverride = relayURLOverride?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let relayURL = normalizedRelayOverride ?? preferredPairingCodeRelayURL,
+              !relayURL.isEmpty,
               let resolveURL = pairingCodeResolveURL(from: relayURL) else {
             throw CodexSecureTransportError.invalidQR(
                 "This iPhone does not know which relay to ask for that pairing code yet. Scan the QR code instead."

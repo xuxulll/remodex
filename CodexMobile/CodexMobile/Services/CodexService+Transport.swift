@@ -326,7 +326,20 @@ extension CodexService {
         case .manualTCP:
             return try await establishManualTCPWebSocketConnection(url: url, token: token, role: role)
         case .networkWebSocket:
-            return try await establishNWWebSocketConnection(url: url, token: token, role: role)
+            do {
+                // Proxy-aware transport first so Shadowsocks-style tunnels can route websocket traffic.
+                return try await establishURLSessionWebSocketConnection(url: url, token: token, role: role)
+            } catch is CancellationError {
+                throw CancellationError()
+            } catch {
+                if let host = url.host?.lowercased(), isLikelyProxyFakeIPv4Host(host) {
+                    throw error
+                }
+                codexLogPairingTransport(
+                    "URLSession websocket failed, falling back to NWConnection: \(urlSessionWebSocketDebugDescription(for: error))"
+                )
+                return try await establishNWWebSocketConnection(url: url, token: token, role: role)
+            }
         }
     }
 

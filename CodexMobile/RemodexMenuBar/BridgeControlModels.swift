@@ -67,6 +67,7 @@ struct BridgeRuntimeStatus: Codable, Equatable {
 struct BridgePairingSession: Codable, Equatable {
     let createdAt: String?
     let pairingPayload: BridgePairingPayload?
+    let pairingCode: String?
 }
 
 struct BridgePairingPayload: Codable, Equatable {

@@ -83,6 +83,7 @@ struct SecureClientHello: Codable, Sendable {
     let handshakeMode: CodexSecureHandshakeMode
     let phoneDeviceId: String
     let phoneIdentityPublicKey: String
+    let clientType: CodexSecureClientType
     let phoneEphemeralPublicKey: String
     let clientNonce: String
 }
