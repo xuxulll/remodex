@@ -130,11 +130,15 @@ function setupRelay(
       if (role === "mac") {
         forwardMacMessageToClients(session, msg);
       } else if (session.mac?.readyState === WebSocket.OPEN) {
-        if (!canForwardClientMessage(session, ws, msg)) {
+        const disposition = clientMessageForwardDisposition(session, ws, msg);
+        if (disposition === "reject") {
           ws.close(
             CLOSE_CODE_CLIENT_AUTH_REQUIRED,
             "Client authentication required"
           );
+          return;
+        }
+        if (disposition === "consume") {
           return;
         }
         session.mac.send(msg);
@@ -265,9 +269,10 @@ function canAcceptClientConnection(session) {
 function forwardMacMessageToClients(session, messageText) {
   const parsed = safeParseJSON(messageText);
   const targetClientDeviceId = normalizeNonEmptyString(parsed?.targetClientDeviceId);
+  const requiresAuthenticatedClient = hasTrustedClientAllowlist(session?.macRegistration);
 
   for (const [clientSocket, clientInfo] of session.clients.entries()) {
-    if (!clientInfo?.authenticated && !clientInfo?.legacyAllowed) {
+    if (requiresAuthenticatedClient && !clientInfo?.authenticated && !clientInfo?.legacyAllowed) {
       continue;
     }
     if (targetClientDeviceId && clientInfo?.clientDeviceId !== targetClientDeviceId) {
@@ -279,39 +284,39 @@ function forwardMacMessageToClients(session, messageText) {
   }
 }
 
-function canForwardClientMessage(session, ws, messageText) {
+function clientMessageForwardDisposition(session, ws, messageText) {
   const clientInfo = session.clients.get(ws);
   if (!clientInfo) {
-    return false;
+    return "reject";
   }
   if (!hasTrustedClientAllowlist(session.macRegistration)) {
-    return true;
+    return "forward";
   }
   if (clientInfo.authenticated || clientInfo.legacyAllowed) {
-    return true;
+    return "forward";
   }
 
   const parsed = safeParseJSON(messageText);
   if (!parsed || typeof parsed !== "object") {
-    return false;
+    return "reject";
   }
 
   if (parsed.kind === "clientRegister") {
     const authResult = processClientRegister(session, ws, parsed);
     if (!authResult.ok) {
-      return false;
+      return "reject";
     }
-    return false;
+    return "consume";
   }
 
   if (parsed.kind === "clientHello") {
     const promoted = maybePromoteLegacyClient(session, ws, parsed);
     if (promoted) {
-      return true;
+      return "forward";
     }
   }
 
-  return false;
+  return "reject";
 }
 
 function maybePromoteLegacyClient(session, ws, clientHello) {
@@ -489,7 +494,7 @@ function resolveTrustedMacSession({
     timestamp: normalizedTimestamp,
   });
   if (!verifyTrustedSessionResolveSignature(
-    normalizedPhoneIdentityPublicKey,
+    normalizedClientIdentityPublicKey,
     transcriptBytes,
     normalizedSignature
   )) {

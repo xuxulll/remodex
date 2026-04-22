@@ -553,6 +553,53 @@ test("websocket relay forwards between mac and iphone on the base relay path", a
   });
 });
 
+test("clientRegister authenticates a trusted client without closing the websocket", async () => {
+  const phoneIdentity = makePhoneIdentity();
+
+  await withServer(async ({ port }) => {
+    const mac = new WebSocket(`ws://127.0.0.1:${port}/relay/session-auth`, {
+      headers: {
+        "x-role": "mac",
+        "x-mac-device-id": "mac-auth",
+        "x-mac-identity-public-key": "mac-public-key-auth",
+        "x-trusted-phone-device-id": phoneIdentity.phoneDeviceId,
+        "x-trusted-phone-public-key": phoneIdentity.phoneIdentityPublicKey,
+      },
+    });
+    const iphone = new WebSocket(`ws://127.0.0.1:${port}/relay/session-auth`, {
+      headers: { "x-role": "iphone" },
+    });
+
+    await Promise.all([onceOpen(mac), onceOpen(iphone)]);
+
+    let iphoneCloseDetails = null;
+    iphone.once("close", (code, reason) => {
+      iphoneCloseDetails = { code, reason: reason.toString("utf8") };
+    });
+
+    iphone.send(JSON.stringify(makeClientRegisterBody({
+      sessionId: "session-auth",
+      phoneIdentity,
+      nonce: "register-nonce-1",
+      timestamp: Date.now(),
+    })));
+
+    await delay(25);
+    assert.equal(iphone.readyState, WebSocket.OPEN);
+    assert.equal(iphoneCloseDetails, null);
+
+    const forwardedMessage = onceMessage(mac);
+    iphone.send(JSON.stringify({ id: "request-1", method: "thread/list" }));
+    assert.equal(await forwardedMessage, "{\"id\":\"request-1\",\"method\":\"thread/list\"}");
+
+    const macClosed = onceClosed(mac);
+    const iphoneClosed = onceClosed(iphone);
+    mac.close();
+    iphone.close();
+    await Promise.all([macClosed, iphoneClosed]);
+  });
+});
+
 test("relay keeps the iPhone connected briefly but rejects new sends while the mac is absent", async () => {
   await withServer(async ({ port }) => {
     const mac = new WebSocket(`ws://127.0.0.1:${port}/relay/session-grace`, {
@@ -791,6 +838,44 @@ function makeTrustedResolveBody({
   };
 }
 
+function makeClientRegisterBody({
+  sessionId,
+  phoneIdentity,
+  nonce,
+  timestamp,
+}) {
+  const transcript = buildClientRegisterTranscript({
+    sessionId,
+    clientDeviceId: phoneIdentity.phoneDeviceId,
+    clientIdentityPublicKey: phoneIdentity.phoneIdentityPublicKey,
+    nonce,
+    timestamp,
+  });
+
+  return {
+    kind: "clientRegister",
+    sessionId,
+    clientDeviceId: phoneIdentity.phoneDeviceId,
+    clientIdentityPublicKey: phoneIdentity.phoneIdentityPublicKey,
+    clientType: "iphone",
+    nonce,
+    timestamp,
+    signature: sign(
+      null,
+      transcript,
+      {
+        key: {
+          crv: "Ed25519",
+          d: base64ToBase64Url(phoneIdentity.phoneIdentityPrivateKey),
+          kty: "OKP",
+          x: base64ToBase64Url(phoneIdentity.phoneIdentityPublicKey),
+        },
+        format: "jwk",
+      }
+    ).toString("base64"),
+  };
+}
+
 function buildTrustedResolveTranscript({
   macDeviceId,
   phoneDeviceId,
@@ -803,6 +888,23 @@ function buildTrustedResolveTranscript({
     encodeLengthPrefixedUTF8(macDeviceId),
     encodeLengthPrefixedUTF8(phoneDeviceId),
     encodeLengthPrefixedData(Buffer.from(phoneIdentityPublicKey, "base64")),
+    encodeLengthPrefixedUTF8(nonce),
+    encodeLengthPrefixedUTF8(String(timestamp)),
+  ]);
+}
+
+function buildClientRegisterTranscript({
+  sessionId,
+  clientDeviceId,
+  clientIdentityPublicKey,
+  nonce,
+  timestamp,
+}) {
+  return Buffer.concat([
+    encodeLengthPrefixedUTF8("remodex-relay-client-register-v1"),
+    encodeLengthPrefixedUTF8(sessionId),
+    encodeLengthPrefixedUTF8(clientDeviceId),
+    encodeLengthPrefixedData(Buffer.from(clientIdentityPublicKey, "base64")),
     encodeLengthPrefixedUTF8(nonce),
     encodeLengthPrefixedUTF8(String(timestamp)),
   ]);

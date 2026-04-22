@@ -81,6 +81,54 @@ final class CodexServiceThreadListTests: XCTestCase {
         )
     }
 
+    func testReconcilePrunesLocalOnlyThreadsWhenBackendChanges() {
+        let service = makeService()
+        service.defaults.set(
+            "mac-previous",
+            forKey: CodexService.lastThreadListBackendFingerprintDefaultsKey
+        )
+        service.relayMacDeviceId = "mac-current"
+        service.threads = [
+            CodexThread(id: "stale-thread", title: "Stale"),
+            CodexThread(id: "server-thread", title: "Local copy"),
+        ]
+        service.messagesByThread = [
+            "stale-thread": [CodexMessage(id: "message-1", role: .user, text: "stale")],
+        ]
+
+        service.reconcileLocalThreadsWithServer([
+            CodexThread(id: "server-thread", title: "Fresh"),
+        ])
+
+        XCTAssertEqual(service.threads.map(\.id), ["server-thread"])
+        XCTAssertNil(service.messagesByThread["stale-thread"])
+        XCTAssertEqual(
+            service.defaults.string(forKey: CodexService.lastThreadListBackendFingerprintDefaultsKey),
+            "mac-current"
+        )
+    }
+
+    func testReconcileKeepsLocalOnlyThreadsWhenBackendIsUnchanged() {
+        let service = makeService()
+        service.defaults.set(
+            "mac-current",
+            forKey: CodexService.lastThreadListBackendFingerprintDefaultsKey
+        )
+        service.relayMacDeviceId = "mac-current"
+        service.threads = [
+            CodexThread(id: "local-only-thread", title: "Local Only"),
+        ]
+
+        service.reconcileLocalThreadsWithServer([
+            CodexThread(id: "server-thread", title: "Fresh"),
+        ])
+
+        XCTAssertEqual(
+            service.threads.map(\.id),
+            ["server-thread", "local-only-thread"]
+        )
+    }
+
     private func makeService() -> CodexService {
         let suiteName = "CodexServiceThreadListTests.\(UUID().uuidString)"
         let defaults = UserDefaults(suiteName: suiteName) ?? .standard

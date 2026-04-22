@@ -296,14 +296,63 @@ struct SettingsView: View {
         Binding(
             get: { codex.macConnectionTarget },
             set: { newTarget in
+                let previousTarget = codex.macConnectionTarget
                 codex.setMacConnectionTarget(newTarget)
                 remotePairingErrorMessage = nil
                 if newTarget == .remoteMacBridge,
                    remoteRelayAddressDraft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                     remoteRelayAddressDraft = codex.normalizedRelayURL ?? ""
                 }
+                if previousTarget != newTarget {
+                    Task { @MainActor in
+                        await reconnectAfterConnectionTargetSwitchIfNeeded()
+                    }
+                }
             }
         )
+    }
+
+    private func reconnectAfterConnectionTargetSwitchIfNeeded() async {
+        guard codex.isConnected || codex.isConnecting else {
+            return
+        }
+
+        await codex.disconnect(preserveReconnectIntent: false)
+        guard let reconnectURL = reconnectURLForSelectedConnectionTarget() else {
+            return
+        }
+
+        do {
+            try await codex.connect(
+                serverURL: reconnectURL,
+                token: "",
+                role: "desktop"
+            )
+        } catch {
+            if codex.lastErrorMessage?.isEmpty ?? true {
+                codex.lastErrorMessage = codex.userFacingConnectFailureMessage(error)
+            }
+        }
+    }
+
+    private func reconnectURLForSelectedConnectionTarget() -> String? {
+        if let localBridgeURL = codex.normalizedLocalBridgeServerURL {
+            return localBridgeURL
+        }
+
+        guard let relayURL = codex.normalizedRelayURL else {
+            return nil
+        }
+
+        if codex.shouldUseDirectRelayTransport {
+            return relayURL
+        }
+
+        guard let sessionId = codex.normalizedRelaySessionId else {
+            return nil
+        }
+
+        return "\(relayURL)/\(sessionId)"
     }
 
     @ViewBuilder

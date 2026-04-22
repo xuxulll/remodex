@@ -263,6 +263,8 @@ extension CodexService {
         _ serverThreads: [CodexThread],
         serverArchivedThreads: [CodexThread] = []
     ) {
+        let backendFingerprint = currentThreadListBackendFingerprint()
+        let didBackendChange = didThreadListBackendChange(using: backendFingerprint)
         let localByID = Dictionary(uniqueKeysWithValues: threads.map { ($0.id, $0) })
         let persistedArchivedIDs = locallyArchivedThreadIDs
         let persistedDeletedIDs = locallyDeletedThreadIDs
@@ -312,14 +314,27 @@ extension CodexService {
         // Keep local-only threads as-is; a missing entry in thread/list can be
         // caused by server-side pagination or temporary visibility mismatch.
         // We archive only on explicit "thread not found" from thread/read/turn/start.
+        var prunedLocalOnlyThreadIDs: [String] = []
         for localThread in threads where merged[localThread.id] == nil {
             if persistedDeletedIDs.contains(localThread.id) {
+                continue
+            }
+            if didBackendChange {
+                prunedLocalOnlyThreadIDs.append(localThread.id)
                 continue
             }
             merged[localThread.id] = localThread
         }
 
+        if !prunedLocalOnlyThreadIDs.isEmpty {
+            for threadID in prunedLocalOnlyThreadIDs {
+                removeThreadLocally(threadID, persistAsDeleted: false, persistMessages: false)
+            }
+            messagePersistence.save(messagesByThread)
+        }
+
         threads = sortThreads(Array(merged.values))
+        persistThreadListBackendFingerprint(backendFingerprint)
         assistantRevertStateCacheByThread.removeAll()
         refreshBusyRepoRootsAndDependentTimelineStates()
         // Full reconciliation — always refresh all threads even if busy-roots already hit some.
@@ -1002,6 +1017,49 @@ extension CodexService {
         var ids = locallyArchivedThreadIDs
         ids.remove(threadId)
         defaults.set(Array(ids), forKey: Self.locallyArchivedThreadIDsKey)
+    }
+
+    private func currentThreadListBackendFingerprint() -> String? {
+        let candidates = [
+            relayMacDeviceId,
+            normalizedRelayURL,
+            localBridgeServerURL,
+        ]
+
+        for candidate in candidates {
+            guard let trimmed = candidate?.trimmingCharacters(in: .whitespacesAndNewlines),
+                  !trimmed.isEmpty else {
+                continue
+            }
+            return trimmed
+        }
+
+        return nil
+    }
+
+    private func didThreadListBackendChange(using currentFingerprint: String?) -> Bool {
+        guard let currentFingerprint else {
+            return false
+        }
+
+        guard let previousFingerprint = defaults.string(
+            forKey: Self.lastThreadListBackendFingerprintDefaultsKey
+        )?.trimmingCharacters(in: .whitespacesAndNewlines),
+        !previousFingerprint.isEmpty else {
+            return false
+        }
+
+        return previousFingerprint != currentFingerprint
+    }
+
+    private func persistThreadListBackendFingerprint(_ fingerprint: String?) {
+        guard let trimmedFingerprint = fingerprint?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !trimmedFingerprint.isEmpty else {
+            defaults.removeObject(forKey: Self.lastThreadListBackendFingerprintDefaultsKey)
+            return
+        }
+
+        defaults.set(trimmedFingerprint, forKey: Self.lastThreadListBackendFingerprintDefaultsKey)
     }
 
     private func addLocallyDeletedThreadID(_ threadId: String) {
