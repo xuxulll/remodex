@@ -49,53 +49,6 @@ struct TurnComposerAttachmentIntakePlan {
     }
 }
 
-struct QueuedTurnDraft: Identifiable {
-    let id: String
-    let text: String
-    let attachments: [CodexImageAttachment]
-    let skillMentions: [CodexTurnSkillMention]
-    // Preserves special send semantics, such as plan mode, while a busy thread queues locally.
-    let collaborationMode: CodexCollaborationModeKind?
-    // Preserves the original composer state so a queued row can move back into the input intact.
-    let rawInput: String
-    let rawFileMentions: [TurnComposerMentionedFile]
-    let rawSkillMentions: [TurnComposerMentionedSkill]
-    let rawAttachments: [TurnComposerImageAttachment]
-    let rawSubagentsSelectionArmed: Bool
-    let createdAt: Date
-
-    init(
-        id: String,
-        text: String,
-        attachments: [CodexImageAttachment],
-        skillMentions: [CodexTurnSkillMention],
-        collaborationMode: CodexCollaborationModeKind?,
-        rawInput: String? = nil,
-        rawFileMentions: [TurnComposerMentionedFile] = [],
-        rawSkillMentions: [TurnComposerMentionedSkill] = [],
-        rawAttachments: [TurnComposerImageAttachment] = [],
-        rawSubagentsSelectionArmed: Bool = false,
-        createdAt: Date
-    ) {
-        self.id = id
-        self.text = text
-        self.attachments = attachments
-        self.skillMentions = skillMentions
-        self.collaborationMode = collaborationMode
-        self.rawInput = rawInput ?? text
-        self.rawFileMentions = rawFileMentions
-        self.rawSkillMentions = rawSkillMentions
-        self.rawAttachments = rawAttachments
-        self.rawSubagentsSelectionArmed = rawSubagentsSelectionArmed
-        self.createdAt = createdAt
-    }
-}
-
-enum QueuePauseState: Equatable {
-    case active
-    case paused(errorMessage: String)
-}
-
 @MainActor
 @Observable
 final class TurnViewModel {
@@ -2294,19 +2247,6 @@ final class TurnViewModel {
         let encodedBase = base.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? base
         return "https://github.com/\(ownerRepo)/compare/\(encodedBase)...\(encodedBranch)?expand=1"
     }
-}
-
-struct TurnComposerMentionedFile: Identifiable, Equatable {
-    let id = UUID().uuidString
-    let fileName: String
-    let path: String
-}
-
-struct TurnComposerMentionedSkill: Identifiable, Equatable {
-    let id = UUID().uuidString
-    let name: String
-    let path: String?
-    let description: String?
 }
 
 struct TurnTrailingFileAutocompleteToken: Equatable {

@@ -4,6 +4,7 @@
 // Exports: BridgeControlService, ShellCommandRunner
 // Depends on: Foundation, CryptoKit, Security, BridgeControlModels
 
+#if os(macOS)
 import CryptoKit
 import Darwin
 import Foundation
@@ -490,7 +491,9 @@ private final class NativeCodexRuntimeHost: CodexHosting {
                 )
             }
 
-            if await isReadyEndpointReachable() {
+            let readyEndpointReachable = await isReadyEndpointReachable()
+            let listenerReady = await isRuntimeListenerReady(processID: process.processIdentifier)
+            if readyEndpointReachable || listenerReady {
                 return
             }
 
@@ -501,6 +504,12 @@ private final class NativeCodexRuntimeHost: CodexHosting {
             reason: "Timed out waiting for Codex app-server readiness on port \(nativeBridgePort).",
             stderrURL: stderrURL
         )
+    }
+
+    // Accepts listener readiness so start/restart stay compatible when app-server doesn't expose /readyz.
+    private func isRuntimeListenerReady(processID: Int32) async -> Bool {
+        let listeners = await listeningRuntimePIDs()
+        return listeners.contains(processID)
     }
 
     private func isReadyEndpointReachable() async -> Bool {
@@ -990,3 +999,4 @@ final class BridgeControlService {
 private func shellQuoted(_ value: String) -> String {
     "'\(value.replacingOccurrences(of: "'", with: "'\\''"))'"
 }
+#endif

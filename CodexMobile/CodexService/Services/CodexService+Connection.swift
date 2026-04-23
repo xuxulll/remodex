@@ -162,6 +162,7 @@ extension CodexService {
         supportsBridgeVoiceAuth = true
         supportsThreadFork = true
         supportsBridgeSettingsRead = true
+        supportsContextWindowRead = true
         hasPresentedThreadForkBridgeUpdatePrompt = false
         hasPresentedMinimumBridgePackageUpdatePrompt = false
         lastPresentedAvailableBridgePackageVersion = nil
@@ -547,6 +548,7 @@ extension CodexService {
         supportsBridgeVoiceAuth = true
         supportsThreadFork = true
         supportsBridgeSettingsRead = true
+        supportsContextWindowRead = true
         hasPresentedThreadForkBridgeUpdatePrompt = false
         hasPresentedMinimumBridgePackageUpdatePrompt = false
         lastPresentedAvailableBridgePackageVersion = nil

@@ -467,41 +467,6 @@ struct PlanModeCardContainer<Content: View>: View {
     }
 }
 
-// MARK: - Question model helpers (package-visible)
-
-extension CodexStructuredUserInputQuestion {
-    var trimmedHeader: String? {
-        let trimmed = header.trimmingCharacters(in: .whitespacesAndNewlines)
-        return trimmed.isEmpty ? nil : trimmed
-    }
-
-    var trimmedPrompt: String {
-        question.trimmingCharacters(in: .whitespacesAndNewlines)
-    }
-
-    var needsFreeformField: Bool {
-        options.isEmpty || isOther || isSecret
-    }
-
-    var answerFieldPlaceholder: String {
-        isOther ? "Other answer" : "Your answer"
-    }
-
-    var selectionLimitDescription: String? {
-        guard let selectionLimit, selectionLimit > 1 else {
-            return nil
-        }
-        return "Select up to \(selectionLimit)"
-    }
-}
-
-extension CodexStructuredUserInputOption {
-    var trimmedDescription: String? {
-        let trimmed = description.trimmingCharacters(in: .whitespacesAndNewlines)
-        return trimmed.isEmpty ? nil : trimmed
-    }
-}
-
 // MARK: - Previews
 
 #Preview("Multiple choice") {

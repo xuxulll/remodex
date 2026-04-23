@@ -393,6 +393,8 @@ final class CodexService {
     var supportsThreadFork = true
     // Runtime compatibility flag for bridge-owned settings snapshot (`bridge/settings/read`).
     var supportsBridgeSettingsRead = true
+    // Runtime compatibility flag for thread-scoped context window snapshots (`thread/contextWindow/read`).
+    var supportsContextWindowRead = true
     // Seeds brand-new chats with one-shot composer actions like code review.
     var pendingComposerActionByThreadID: [String: CodexPendingThreadComposerAction] = [:]
     // In-memory identity directory for subagents, keyed by thread id and agent id.

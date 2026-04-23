@@ -19,7 +19,11 @@ final class RemodexInteractionService {
         #if os(macOS)
         self.codexService.localBridgeServerURL = RemodexMacBridgeRuntime.localBridgeWebSocketURL
         Task { @MainActor in
-            await macBridgeRuntime.startIfNeeded()
+            do {
+                try await self.codexService.startLocalMacBridge()
+            } catch {
+                return
+            }
         }
         #endif
     }

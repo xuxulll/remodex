@@ -160,7 +160,7 @@ enum TurnFileChangeSummaryParser {
                 }
 
                 let code = codeLines.joined(separator: "\n")
-                if TurnDiffLineKind.detectVerifiedPatch(in: code) {
+                if detectVerifiedPatch(in: code) {
                     sawDiffFence = true
                     let resolvedPath = currentPath ?? parsePathFromDiff(lines: codeLines)
                     if let resolvedPath, !resolvedPath.isEmpty {
@@ -520,6 +520,61 @@ enum TurnFileChangeSummaryParser {
         ]
 
         return metadataPrefixes.contains { line.hasPrefix($0) }
+    }
+
+    // Strict diff detection: accepts metadata-only patches while avoiding generic prose/code blocks.
+    private static func detectVerifiedPatch(in code: String) -> Bool {
+        let lines = code.split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
+        guard !lines.isEmpty else { return false }
+
+        var hasHunk = false
+        var hasGitHeader = false
+        var hasBodyChange = false
+        var metadataEvidenceCount = 0
+
+        for line in lines {
+            if line.hasPrefix("@@") {
+                hasHunk = true
+                continue
+            }
+
+            if line.hasPrefix("diff --git ")
+                || line.hasPrefix("--- ")
+                || line.hasPrefix("+++ ")
+                || line.hasPrefix("index ")
+                || line.hasPrefix("new file mode")
+                || line.hasPrefix("deleted file mode")
+                || line.hasPrefix("old mode ")
+                || line.hasPrefix("new mode ")
+                || line.hasPrefix("rename from ")
+                || line.hasPrefix("rename to ")
+                || line.hasPrefix("similarity index ")
+                || line.hasPrefix("dissimilarity index ") {
+                hasGitHeader = true
+                metadataEvidenceCount += 1
+                continue
+            }
+
+            if line.hasPrefix("+") && !line.hasPrefix("+++") {
+                hasBodyChange = true
+                continue
+            }
+
+            if line.hasPrefix("-") && !line.hasPrefix("---") {
+                hasBodyChange = true
+                continue
+            }
+        }
+
+        if hasBodyChange {
+            return hasHunk || hasGitHeader
+        }
+
+        if hasHunk {
+            return true
+        }
+
+        return hasGitHeader && metadataEvidenceCount >= 2
     }
 
     // Removes one-line edit recap rows so we can render them as dedicated UI blocks.

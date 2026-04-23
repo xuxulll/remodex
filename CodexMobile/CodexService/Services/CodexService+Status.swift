@@ -20,7 +20,10 @@ extension CodexService {
         guard isConnected else { return false }
 
         let needsContextUsage = normalizedUsageStatusThreadID(threadId).map { normalizedThreadID in
-            contextWindowUsageByThread[normalizedThreadID] == nil
+            guard supportsContextWindowRead else {
+                return false
+            }
+            return contextWindowUsageByThread[normalizedThreadID] == nil
         } ?? false
 
         let needsRateLimits = !hasResolvedRateLimitsSnapshot
@@ -31,6 +34,11 @@ extension CodexService {
     func refreshContextWindowUsage(threadId: String) async {
         let trimmedThreadID = threadId.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmedThreadID.isEmpty else { return }
+
+        if !supportsContextWindowRead {
+            await refreshContextWindowUsageViaThreadRead(threadId: trimmedThreadID)
+            return
+        }
 
         var params: RPCObject = ["threadId": .string(trimmedThreadID)]
         if let turnId = activeTurnIdByThread[trimmedThreadID]?.trimmingCharacters(in: .whitespacesAndNewlines),
@@ -51,6 +59,11 @@ extension CodexService {
 
             contextWindowUsageByThread[trimmedThreadID] = usage
         } catch {
+            if shouldFallbackContextWindowReadToThreadRead(error) {
+                supportsContextWindowRead = false
+                await refreshContextWindowUsageViaThreadRead(threadId: trimmedThreadID)
+                return
+            }
             debugSyncLog("thread/contextWindow/read failed (non-fatal): \(error.localizedDescription)")
         }
     }
@@ -286,5 +299,93 @@ private extension CodexService {
             || lowered.contains("expected")
             || lowered.contains("missing field `params`")
             || lowered.contains("missing field params")
+    }
+
+    // Falls back when old runtimes reject the dedicated context-window route.
+    func shouldFallbackContextWindowReadToThreadRead(_ error: Error) -> Bool {
+        guard let serviceError = error as? CodexServiceError,
+              case .rpcError(let rpcError) = serviceError else {
+            return false
+        }
+
+        if rpcError.code == -32601 {
+            return true
+        }
+
+        guard rpcError.code == -32600 || rpcError.code == -32602 || rpcError.code == -32000 else {
+            return false
+        }
+
+        let message = rpcError.message.lowercased()
+        return message.contains("thread/contextwindow/read")
+            || message.contains("contextwindow/read")
+            || message.contains("method not found")
+            || message.contains("unknown method")
+            || message.contains("unknown variant")
+            || message.contains("not implemented")
+    }
+
+    // Keeps context usage available on runtimes that only expose thread/read.
+    func refreshContextWindowUsageViaThreadRead(threadId: String) async {
+        do {
+            let response = try await fetchThreadReadUsageSnapshot(threadId: threadId)
+            guard let resultObject = response.result?.objectValue else {
+                throw CodexServiceError.invalidResponse("thread/read response missing payload")
+            }
+
+            let threadObject = resultObject["thread"]?.objectValue ?? resultObject
+            guard let usage = extractContextWindowUsage(from: threadObject) else {
+                return
+            }
+
+            contextWindowUsageByThread[threadId] = usage
+        } catch {
+            debugSyncLog("thread/read context usage fallback failed (non-fatal): \(error.localizedDescription)")
+        }
+    }
+
+    // Retries thread/read with snake_case for older bridges.
+    func fetchThreadReadUsageSnapshot(threadId: String) async throws -> RPCMessage {
+        let camelCaseParams: JSONValue = .object([
+            "threadId": .string(threadId),
+            "includeTurns": .bool(false),
+        ])
+
+        do {
+            return try await sendRequest(method: "thread/read", params: camelCaseParams)
+        } catch {
+            guard shouldRetryThreadReadUsageSnapshotWithSnakeCase(error) else {
+                throw error
+            }
+        }
+
+        let snakeCaseParams: JSONValue = .object([
+            "thread_id": .string(threadId),
+            "include_turns": .bool(false),
+        ])
+        return try await sendRequest(method: "thread/read", params: snakeCaseParams)
+    }
+
+    func shouldRetryThreadReadUsageSnapshotWithSnakeCase(_ error: Error) -> Bool {
+        guard let serviceError = error as? CodexServiceError,
+              case .rpcError(let rpcError) = serviceError else {
+            return false
+        }
+
+        guard rpcError.code == -32600 || rpcError.code == -32602 else {
+            return false
+        }
+
+        let message = rpcError.message.lowercased()
+        let hints = [
+            "threadid",
+            "includeturns",
+            "thread_id",
+            "include_turns",
+            "unknown field",
+            "missing field",
+            "invalid",
+        ]
+        return hints.contains { message.contains($0) }
     }
 }

@@ -144,6 +144,8 @@ struct CodexBridgeConnectedClient: Equatable, Sendable {
 }
 
 struct CodexBridgeSettingsSnapshot: Equatable, Sendable {
+    let macAppVersion: String?
+    let macAppBuild: String?
     let relayURL: String?
     let relaySessionId: String?
     let pairingPayload: CodexPairingQRPayload?
@@ -1003,14 +1005,14 @@ extension CodexService {
 
         let rawClients = firstArrayValue(
             in: payloadObject,
-            keys: ["currentClients", "current_clients"]
+            keys: ["currentClients", "current_clients", "connectedClients", "connected_clients", "clients"]
         ) ?? []
         let clients = rawClients.compactMap { clientValue -> CodexBridgeConnectedClient? in
             guard let clientObject = clientValue.objectValue,
-                  let clientDeviceId = firstStringValue(in: clientObject, keys: ["clientDeviceId", "client_device_id"]),
-                  let keyEpoch = firstIntValue(in: clientObject, keys: ["keyEpoch", "key_epoch"]) else {
+                  let clientDeviceId = firstStringValue(in: clientObject, keys: ["clientDeviceId", "client_device_id"]) else {
                 return nil
             }
+            let keyEpoch = firstIntValue(in: clientObject, keys: ["keyEpoch", "key_epoch"]) ?? 0
             let isResumed = firstBoolValue(in: clientObject, keys: ["isResumed", "is_resumed"]) ?? false
             return CodexBridgeConnectedClient(
                 clientDeviceId: clientDeviceId,
@@ -1023,6 +1025,14 @@ extension CodexService {
         }
 
         return CodexBridgeSettingsSnapshot(
+            macAppVersion: firstStringValue(
+                in: payloadObject,
+                keys: ["macAppVersion", "mac_app_version", "appVersion", "app_version"]
+            ),
+            macAppBuild: firstStringValue(
+                in: payloadObject,
+                keys: ["macAppBuild", "mac_app_build", "appBuild", "app_build", "buildNumber", "build_number"]
+            ),
             relayURL: firstStringValue(in: payloadObject, keys: ["relayUrl", "relay_url"]),
             relaySessionId: firstStringValue(in: payloadObject, keys: ["relaySessionId", "relay_session_id"]),
             pairingPayload: pairingPayload,
@@ -1139,6 +1149,8 @@ extension CodexService {
         )] : []
 
         return CodexBridgeSettingsSnapshot(
+            macAppVersion: localMacAppVersionString(),
+            macAppBuild: localMacAppBuildString(),
             relayURL: normalizedNonEmptyString(snapshot.effectiveRelayURL),
             relaySessionId: pairingPayload?.sessionId ?? trustedState.relaySessionId,
             pairingPayload: pairingPayload,
@@ -1177,6 +1189,8 @@ extension CodexService {
         ) : nil
         let clients = client.map { [$0] } ?? []
         return CodexBridgeSettingsSnapshot(
+            macAppVersion: nil,
+            macAppBuild: nil,
             relayURL: relayURL,
             relaySessionId: normalizedRelaySessionId,
             pairingPayload: nil,
@@ -1188,6 +1202,22 @@ extension CodexService {
             connectedClientCount: clients.count,
             secureChannelReady: secureSession != nil || bypassSecureTransportForCurrentConnection
         )
+    }
+
+    private func localMacAppVersionString() -> String? {
+        guard let value = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String else {
+            return nil
+        }
+        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? nil : trimmed
+    }
+
+    private func localMacAppBuildString() -> String? {
+        guard let value = Bundle.main.infoDictionary?["CFBundleVersion"] as? String else {
+            return nil
+        }
+        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? nil : trimmed
     }
 
     private func consumeUnsupportedBridgeSettingsRead(_ error: Error) -> Bool {

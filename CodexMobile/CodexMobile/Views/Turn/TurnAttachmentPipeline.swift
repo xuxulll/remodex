@@ -19,17 +19,6 @@ typealias TurnPlatformImage = UIImage
 typealias TurnPlatformImage = NSImage
 #endif
 
-struct TurnComposerImageAttachment: Identifiable {
-    let id: String
-    var state: TurnComposerImageAttachmentState
-}
-
-enum TurnComposerImageAttachmentState: Equatable {
-    case loading
-    case ready(CodexImageAttachment)
-    case failed
-}
-
 enum TurnAttachmentPipeline {
     static let thumbnailSide: CGFloat = 70
     static let thumbnailCornerRadius: CGFloat = 12
