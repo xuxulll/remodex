@@ -407,6 +407,14 @@ extension ContentViewModel {
     // Chooses the best reconnect path: resolve the live trusted-Mac session first, then fall back to the saved QR session.
     func preferredReconnectURL(codex: CodexService) async -> String? {
         if let localBridgeURL = codex.normalizedLocalBridgeServerURL {
+            #if os(macOS)
+            do {
+                try await BridgeControlService().startBridge(relayOverride: nil)
+            } catch {
+                codex.lastErrorMessage = error.localizedDescription
+                return nil
+            }
+            #endif
             return localBridgeURL
         }
 
