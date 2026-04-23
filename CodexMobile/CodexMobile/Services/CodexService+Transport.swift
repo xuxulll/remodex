@@ -495,6 +495,10 @@ extension CodexService {
         configuration.allowsCellularAccess = true
         configuration.allowsConstrainedNetworkAccess = true
         configuration.allowsExpensiveNetworkAccess = true
+        if prefersDirectRelayTransport(for: url) {
+            // Keep LAN/private-overlay app-server traffic off system proxies.
+            configuration.connectionProxyDictionary = [:]
+        }
         let delegate = CodexURLSessionWebSocketDelegate()
         let session = URLSession(configuration: configuration, delegate: delegate, delegateQueue: nil)
         let task = session.webSocketTask(with: request)
@@ -704,11 +708,12 @@ extension CodexService {
         }
     }
 
-    private func relayTransportPreference(for url: URL) -> CodexRelayTransportPreference {
+    private func relayTransportPreference(for _: URL) -> CodexRelayTransportPreference {
         #if os(macOS)
         return .networkWebSocket
         #else
-        prefersDirectRelayTransport(for: url) ? .manualTCP : .networkWebSocket
+        // Prefer the system websocket stack on iOS for bidirectional reliability.
+        return .networkWebSocket
         #endif
     }
 
