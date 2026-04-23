@@ -200,10 +200,12 @@ struct SettingsView: View {
                     HapticFeedback.shared.triggerImpactFeedback()
                     disconnectRelay()
                 }
-            } else if codex.hasTrustedMacReconnectCandidate {
-                SettingsButton("Forget Pair", role: .destructive) {
+            }
+
+            if shouldShowForceUnpairMacBridgeButton {
+                SettingsButton("Force Unpair Mac Bridge", role: .destructive) {
                     HapticFeedback.shared.triggerImpactFeedback()
-                    codex.forgetTrustedMac()
+                    forceUnpairMacBridge()
                 }
             }
 
@@ -283,6 +285,27 @@ struct SettingsView: View {
         Task { @MainActor in
             await codex.disconnect()
             codex.clearSavedRelaySession()
+        }
+    }
+
+    private var shouldShowForceUnpairMacBridgeButton: Bool {
+        #if os(macOS)
+        let connectedToStartedLocalBridge =
+            codex.isConnected
+            && codex.macConnectionTarget == .localThisMac
+            && codex.normalizedLocalBridgeServerURL != nil
+        return !connectedToStartedLocalBridge
+        #else
+        return true
+        #endif
+    }
+
+    private func forceUnpairMacBridge() {
+        Task { @MainActor in
+            if codex.isConnected {
+                await codex.disconnect(preserveReconnectIntent: false)
+            }
+            codex.forgetReconnectCandidate()
         }
     }
 
