@@ -25,6 +25,26 @@ private enum RootSheetRoute: Identifiable, Equatable {
     }
 }
 
+enum MainContentRounter: Identifiable, Equatable {
+    case thread(CodexThread)
+    case settings
+    case searchResults([CodexMessage])
+    case empty
+    
+    var id: String {
+        switch self {
+        case .thread(let thread):
+            return "thread-\(thread.id)"
+        case .settings:
+            return "settings"
+        case .searchResults:
+            return "search-results"
+        case .empty:
+            return "empty"
+        }
+    }
+}
+
 struct ContentView: View {
     @Environment(CodexService.self) private var codex
     @Environment(\.scenePhase) private var scenePhase
@@ -33,9 +53,8 @@ struct ContentView: View {
     @State private var isSidebarOpen = false
     @State private var sidebarDragOffset: CGFloat = 0
     @State private var isSidebarPrewarmed = false
-    @State private var selectedThread: CodexThread?
     @State private var navigationPath = NavigationPath()
-    @State private var showSettings = false
+    @State private var preferredCompactColumn: NavigationSplitViewColumn = .sidebar
     @State private var isShowingManualScanner = false
     @State private var hasDismissedAutomaticScanner = false
     @State private var scannerCanReturnToOnboarding = false
@@ -52,6 +71,7 @@ struct ContentView: View {
     @State private var whatsNewPresentationTask: Task<Void, Never>?
     @State private var sidebarPrewarmTask: Task<Void, Never>?
     @State private var presentedRootSheet: RootSheetRoute?
+    @State private var presentedMainContent: MainContentRounter = .empty
     @State private var isWhatsNewPresentationReady = false
     @State private var sidebarGestureDebugSequence = 0
     @State private var activeSidebarGestureDebugID: Int?
@@ -100,12 +120,6 @@ struct ContentView: View {
             .task(id: rootSheetPresentationFingerprint) {
                 syncRootSheetPresentationIfNeeded()
             }
-            .onChange(of: showSettings) { _, show in
-                if show {
-                    navigationPath.append("settings")
-                    showSettings = false
-                }
-            }
             .onChange(of: isSidebarOpen) { wasOpen, isOpen in
                 debugSidebarLog(
                     "open-state changed wasOpen=\(wasOpen) isOpen=\(isOpen) prewarmed=\(isSidebarPrewarmed) "
@@ -128,22 +142,25 @@ struct ContentView: View {
                     closeSidebar()
                 }
             }
-            .onChange(of: selectedThread) { previousThread, thread in
-                debugSidebarLog("selectedThread changed from=\(previousThread?.id ?? "nil") to=\(thread?.id ?? "nil")")
+            .onChange(of: presentedMainContent) { previousRoute, route in
+                let previousThreadID = threadId(from: previousRoute)
+                let threadID = threadId(from: route)
+                debugSidebarLog("selectedThread changed from=\(previousThreadID ?? "nil") to=\(threadID ?? "nil")")
                 codex.handleDisplayedThreadChange(
-                    from: previousThread?.id,
-                    to: thread?.id
+                    from: previousThreadID,
+                    to: threadID
                 )
-                codex.activeThreadId = thread?.id
+                codex.activeThreadId = threadID
+                syncCompactColumn(for: route)
             }
             .onChange(of: codex.activeThreadId) { _, activeThreadId in
                 debugSidebarLog("activeThreadId changed to=\(activeThreadId ?? "nil")")
                 guard let activeThreadId,
                       let matchingThread = codex.threads.first(where: { $0.id == activeThreadId }),
-                      selectedThread?.id != matchingThread.id else {
+                      shouldAdoptActiveThreadSelection(matchingThread) else {
                     return
                 }
-                selectedThread = matchingThread
+                presentedMainContent = .thread(matchingThread)
             }
             .onChange(of: codex.threads) { _, threads in
                 debugSidebarLog("threads changed count=\(threads.count) sidebarOpen=\(isSidebarOpen) prewarmed=\(isSidebarPrewarmed)")
@@ -306,6 +323,15 @@ struct ContentView: View {
     private var qrScannerBody: some View {
         QRScannerView(
             onBack: scannerBackAction,
+            onManualPairingSubmit: { relayAddress, relayPort, pairCode in
+                Task {
+                    await submitManualPairingFromScanner(
+                        relayAddress: relayAddress,
+                        relayPort: relayPort,
+                        pairCode: pairCode
+                    )
+                }
+            },
             onScan: { pairingPayload in
                 Task {
                     isShowingManualScanner = false
@@ -320,15 +346,89 @@ struct ContentView: View {
         )
     }
 
+    private func submitManualPairingFromScanner(
+        relayAddress: String,
+        relayPort: String,
+        pairCode: String
+    ) async {
+        guard let relayURL = normalizedRemoteRelayURLForScanner(
+            relayAddress: relayAddress,
+            relayPort: relayPort
+        ) else {
+            manualPairingErrorMessage = "Enter a valid relay address and port."
+            return
+        }
+
+        let normalizedCode = pairCode.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !normalizedCode.isEmpty else {
+            manualPairingErrorMessage = "Enter a valid pairing code."
+            return
+        }
+
+        do {
+            let pairingPayload = try await codex.resolvePairingCode(
+                normalizedCode,
+                relayURLOverride: relayURL
+            )
+            let connectURL: String
+            if pairingPayload.transport == .directAppServer {
+                connectURL = pairingPayload.relay
+            } else {
+                connectURL = "\(pairingPayload.relay)/\(pairingPayload.sessionId)"
+            }
+
+            await codex.disconnect(preserveReconnectIntent: false)
+            codex.rememberRelayPairing(pairingPayload)
+            try await codex.connect(
+                serverURL: connectURL,
+                token: "",
+                role: "iphone"
+            )
+            await codex.refreshBridgeSettingsSnapshot()
+            isShowingManualScanner = false
+            hasDismissedAutomaticScanner = false
+            scannerCanReturnToOnboarding = false
+        } catch {
+            manualPairingErrorMessage = error.localizedDescription
+        }
+    }
+
+    private func normalizedRemoteRelayURLForScanner(
+        relayAddress: String,
+        relayPort: String
+    ) -> String? {
+        let host = relayAddress.trimmingCharacters(in: .whitespacesAndNewlines)
+        let port = relayPort.trimmingCharacters(in: .whitespacesAndNewlines)
+
+        guard !host.isEmpty,
+              !port.isEmpty,
+              let portValue = Int(port),
+              (1...65_535).contains(portValue) else {
+            return nil
+        }
+
+        let withScheme = host.contains("://") ? host : "ws://\(host)"
+        guard var components = URLComponents(string: withScheme),
+              let normalizedHost = components.host?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !normalizedHost.isEmpty else {
+            return nil
+        }
+
+        components.port = portValue
+        components.path = "/relay"
+        components.query = nil
+        components.fragment = nil
+        return components.string
+    }
+
     private func effectiveSidebarWidth(for availableWidth: CGFloat) -> CGFloat {
         min(sidebarWidth, availableWidth)
     }
 
     private var mainAppBody: some View {
-        NavigationSplitView {
+        NavigationSplitView(preferredCompactColumn: $preferredCompactColumn) {
             SidebarView(
-                selectedThread: $selectedThread,
-                showSettings: $showSettings,
+                mainBodyRouter: $presentedMainContent,
                 isSearchActive: $isSearchActive,
                 showsInlineCloseButton: false,
                 isVisible: true,
@@ -337,45 +437,60 @@ struct ContentView: View {
                     openThreadFromSidebar(thread)
                 }
             )
-            .frame(minWidth: 260, idealWidth: sidebarWidth)
+            .navigationSplitViewColumnWidth(
+                min: sidebarWidth - 100,
+                ideal: sidebarWidth,
+                max: sidebarWidth + 100
+            )
         } detail: {
-            mainNavigationLayer
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
+            mainContent
         }
-        .navigationSplitViewStyle(.balanced)
+        .onAppear {
+            syncCompactColumn(for: presentedMainContent)
+        }
     }
 
     // MARK: - Layers
-
-    private var mainNavigationLayer: some View {
-        NavigationStack(path: $navigationPath) {
-            mainContent
-                .adaptiveNavigationBar()
-                .navigationDestination(for: String.self) { destination in
-                    if destination == "settings" {
-                        SettingsView()
-                            .adaptiveNavigationBar()
-                    }
-                }
-        }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-    }
-
     @ViewBuilder
     private var mainContent: some View {
-        if let thread = selectedThread {
+        switch presentedMainContent {
+        case .thread(let codexThread):
             TurnView(
-                thread: thread,
+                thread: codexThread,
                 isWakingMacDisplayRecovery: isWakingSavedMacDisplay
             )
-                .id(thread.id)
-                .environment(\.reconnectAction, {
+            .id(codexThread.id)
+            .environment(\.reconnectAction, {
+                Task {
+                    await viewModel.toggleConnection(codex: codex)
+                }
+            })
+            .environment(\.wakeMacDisplayAction, wakeMacDisplayRecoveryAction)
+        case .settings:
+            SettingsView()
+                .adaptiveNavigationBar()
+        case .searchResults:
+            HomeEmptyStateView(
+                connectionPhase: homeConnectionPhase,
+                statusMessage: "Search results are not available yet.",
+                securityLabel: codex.secureConnectionState.statusLabel,
+                trustedPairPresentation: codex.trustedPairPresentation,
+                offlinePrimaryButtonTitle: offlinePrimaryButtonTitle,
+                onPrimaryAction: {
+                    if shouldPresentScannerFromOfflinePrimaryAction {
+                        presentAutomaticScanner()
+                        return
+                    }
                     Task {
                         await viewModel.toggleConnection(codex: codex)
                     }
-                })
-                .environment(\.wakeMacDisplayAction, wakeMacDisplayRecoveryAction)
-        } else {
+                }
+            ) {
+                EmptyView()
+            } footer: {
+                EmptyView()
+            }
+        case .empty:
             HomeEmptyStateView(
                 connectionPhase: homeConnectionPhase,
                 statusMessage: codex.lastErrorMessage,
@@ -387,7 +502,7 @@ struct ContentView: View {
                         presentAutomaticScanner()
                         return
                     }
-
+                    
                     Task {
                         await viewModel.toggleConnection(codex: codex)
                     }
@@ -403,7 +518,7 @@ struct ContentView: View {
                         .buttonStyle(.plain)
                         .disabled(isPreparingManualScanner || isWakingSavedMacDisplay)
                     }
-
+                    
                     if codex.hasReconnectCandidate {
                         reconnectSecondaryActions
                     }
@@ -656,7 +771,7 @@ struct ContentView: View {
             closeSidebar()
         }
 
-        selectedThread = thread
+        presentedMainContent = .thread(thread)
         codex.activeThreadId = thread.id
         codex.markThreadAsViewed(thread.id)
         codex.requestImmediateActiveThreadSync(threadId: thread.id)
@@ -1255,7 +1370,7 @@ struct ContentView: View {
     private func startNewThreadFromMissingNotificationAlert() async {
         do {
             let thread = try await codex.startThread()
-            selectedThread = thread
+            presentedMainContent = .thread(thread)
         } catch {
             codex.lastErrorMessage = codex.userFacingTurnErrorMessage(from: error)
         }
@@ -1300,26 +1415,65 @@ struct ContentView: View {
 
     // Keeps selected thread coherent with server list updates.
     private func syncSelectedThread(with threads: [CodexThread]) {
-        if let selected = selectedThread,
-           !threads.contains(where: { $0.id == selected.id }) {
-            if codex.activeThreadId == selected.id {
+        switch presentedMainContent {
+        case .thread(let selected):
+            if !threads.contains(where: { $0.id == selected.id }) {
+                if codex.activeThreadId == selected.id {
+                    return
+                }
+                if codex.pendingNotificationOpenThreadID == nil,
+                   let first = threads.first {
+                    presentedMainContent = .thread(first)
+                } else {
+                    presentedMainContent = .empty
+                }
                 return
             }
-            selectedThread = codex.pendingNotificationOpenThreadID == nil ? threads.first : nil
+
+            if let refreshed = threads.first(where: { $0.id == selected.id }) {
+                presentedMainContent = .thread(refreshed)
+            }
+        case .empty:
+            if codex.activeThreadId == nil,
+               codex.pendingNotificationOpenThreadID == nil,
+               let first = threads.first {
+                presentedMainContent = .thread(first)
+            }
+        case .settings, .searchResults:
             return
         }
+    }
 
-        if let selected = selectedThread,
-           let refreshed = threads.first(where: { $0.id == selected.id }) {
-            selectedThread = refreshed
-            return
+    private func threadId(from route: MainContentRounter) -> String? {
+        if case .thread(let thread) = route {
+            return thread.id
         }
+        return nil
+    }
 
-        if selectedThread == nil,
-           codex.activeThreadId == nil,
-           codex.pendingNotificationOpenThreadID == nil,
-           let first = threads.first {
-            selectedThread = first
+    private func syncCompactColumn(for route: MainContentRounter) {
+        #if os(iOS)
+        switch route {
+        case .thread, .settings, .searchResults:
+            preferredCompactColumn = .detail
+        case .empty:
+            preferredCompactColumn = .sidebar
+        }
+        #endif
+    }
+
+    // Avoids clobbering a user-picked sidebar selection when background active-thread state changes.
+    private func shouldAdoptActiveThreadSelection(_ activeThread: CodexThread) -> Bool {
+        switch presentedMainContent {
+        case .empty:
+            return true
+        case .thread(let selectedThread):
+            if selectedThread.id == activeThread.id {
+                return false
+            }
+            return !codex.threads.contains(where: { $0.id == selectedThread.id })
+        case .settings, .searchResults:
+            return false
         }
     }
 }

@@ -36,6 +36,19 @@ test("contextUsageFromTokenCountPayload prefers last_token_usage totals", () => 
   });
 });
 
+test("contextUsageFromTokenCountPayload falls back to zero usage when totals are missing", () => {
+  const usage = contextUsageFromTokenCountPayload({
+    info: {
+      model_context_window: 258_400,
+    },
+  });
+
+  assert.deepEqual(usage, {
+    tokensUsed: 0,
+    tokenLimit: 258_400,
+  });
+});
+
 test("watcher falls back to the thread-scoped rollout when turn id is unavailable", async (t) => {
   const { homeDir, threadDir } = makeTemporarySessionsHome();
   const previousCodexHome = process.env.CODEX_HOME;

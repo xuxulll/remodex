@@ -82,37 +82,36 @@ struct TurnConversationContainerView: View {
 
     // ─── ENTRY POINT ─────────────────────────────────────────────
     var body: some View {
-        ZStack(alignment: .top) {
-            TurnTimelineView(
-                threadID: threadID,
-                messages: messageLayout.timelineMessages,
-                timelineChangeToken: timelineChangeToken,
-                activeTurnID: activeTurnID,
-                isThreadRunning: isThreadRunning,
-                latestTurnTerminalState: latestTurnTerminalState,
-                completedTurnIDs: completedTurnIDs,
-                stoppedTurnIDs: stoppedTurnIDs,
-                assistantRevertStatesByMessageID: assistantRevertStatesByMessageID,
-                planSessionSource: planSessionSource,
-                allowsAssistantPlanFallbackRecovery: allowsAssistantPlanFallbackRecovery,
-                threadMessagesForPlanMatching: threadMessagesForPlanMatching,
-                isRetryAvailable: !isThreadRunning,
-                errorMessage: errorMessage,
-                hidesErrorMessage: composerRecoveryAccessory != nil,
-                shouldAnchorToAssistantResponse: shouldAnchorToAssistantResponse,
-                isScrolledToBottom: isScrolledToBottom,
-                isComposerFocused: isComposerFocused,
-                isComposerAutocompletePresented: isComposerAutocompletePresented,
-                onRetryUserMessage: onRetryUserMessage,
-                onTapAssistantRevert: onTapAssistantRevert,
-                onTapSubagent: onTapSubagent,
-                onTapOutsideComposer: onTapOutsideComposer
-            ) {
-                timelineEmptyState
-            } composer: {
-                composerWithPinnedPlanAccessory
-            }
-
+        TurnTimelineView(
+            threadID: threadID,
+            messages: messageLayout.timelineMessages,
+            timelineChangeToken: timelineChangeToken,
+            activeTurnID: activeTurnID,
+            isThreadRunning: isThreadRunning,
+            latestTurnTerminalState: latestTurnTerminalState,
+            completedTurnIDs: completedTurnIDs,
+            stoppedTurnIDs: stoppedTurnIDs,
+            assistantRevertStatesByMessageID: assistantRevertStatesByMessageID,
+            planSessionSource: planSessionSource,
+            allowsAssistantPlanFallbackRecovery: allowsAssistantPlanFallbackRecovery,
+            threadMessagesForPlanMatching: threadMessagesForPlanMatching,
+            isRetryAvailable: !isThreadRunning,
+            errorMessage: errorMessage,
+            hidesErrorMessage: composerRecoveryAccessory != nil,
+            shouldAnchorToAssistantResponse: shouldAnchorToAssistantResponse,
+            isScrolledToBottom: isScrolledToBottom,
+            isComposerFocused: isComposerFocused,
+            isComposerAutocompletePresented: isComposerAutocompletePresented,
+            onRetryUserMessage: onRetryUserMessage,
+            onTapAssistantRevert: onTapAssistantRevert,
+            onTapSubagent: onTapSubagent,
+            onTapOutsideComposer: onTapOutsideComposer
+        ) {
+            timelineEmptyState
+        } composer: {
+            composerWithPinnedPlanAccessory
+        }
+        .overlay(alignment: .top) {
             VStack(spacing: 0) {
                 repositoryLoadingToastOverlay
                 if !isRepositoryLoadingToastVisible {

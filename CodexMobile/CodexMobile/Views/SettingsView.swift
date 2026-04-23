@@ -19,6 +19,7 @@ struct SettingsView: View {
     @AppStorage("codex.appFontStyle") private var appFontStyleRawValue = AppFont.defaultStoredStyleRawValue
     @State private var isShowingMacNameSheet = false
     @State private var remoteRelayAddressDraft = ""
+    @State private var remoteRelayPortDraft = ""
     @State private var remotePairingCodeDraft = ""
     @State private var isConnectingRemoteBridge = false
     @State private var remotePairingErrorMessage: String?
@@ -195,17 +196,14 @@ struct SettingsView: View {
                     .foregroundStyle(.secondary)
             }
 
-            if codex.isConnected {
+            #if os(iOS)
+            remoteBridgePairingSection
+            #endif
+            
+            if shouldShowForceUnpairMacBridgeButton {
                 SettingsButton("Disconnect", role: .destructive) {
                     HapticFeedback.shared.triggerImpactFeedback()
                     disconnectRelay()
-                }
-            }
-
-            if shouldShowForceUnpairMacBridgeButton {
-                SettingsButton("Force Unpair Mac Bridge", role: .destructive) {
-                    HapticFeedback.shared.triggerImpactFeedback()
-                    forceUnpairMacBridge()
                 }
             }
 
@@ -401,7 +399,6 @@ struct SettingsView: View {
         .padding(.vertical, 4)
     }
 
-    #if os(macOS)
     @ViewBuilder
     private var remoteBridgePairingSection: some View {
         Text("Remote Bridge Pairing")
@@ -418,22 +415,8 @@ struct SettingsView: View {
             .font(AppFont.mono(.caption))
             .disabled(isConnectingRemoteBridge)
 
-        HStack(spacing: 8) {
-            SettingsButton("Paste Code") {
-                pasteRemotePairingCodeFromClipboard()
-            }
-            .opacity(isConnectingRemoteBridge ? 0.5 : 1)
-            .disabled(isConnectingRemoteBridge)
-
-            SettingsButton("Paste Relay") {
-                pasteRemoteRelayAddressFromClipboard()
-            }
-            .opacity(isConnectingRemoteBridge ? 0.5 : 1)
-            .disabled(isConnectingRemoteBridge)
-
-            SettingsButton("Connect", isLoading: isConnectingRemoteBridge) {
-                connectToRemoteBridgeWithPairingCode()
-            }
+        SettingsButton("Connect", isLoading: isConnectingRemoteBridge) {
+            connectToRemoteBridgeWithPairingCode()
         }
 
         if let error = remotePairingErrorMessage,
@@ -446,24 +429,6 @@ struct SettingsView: View {
                 .font(AppFont.caption())
                 .foregroundStyle(.secondary)
         }
-    }
-
-    private func pasteRemotePairingCodeFromClipboard() {
-        let clipboard = NSPasteboard.general.string(forType: .string)?
-            .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        guard !clipboard.isEmpty else {
-            return
-        }
-        remotePairingCodeDraft = clipboard
-    }
-
-    private func pasteRemoteRelayAddressFromClipboard() {
-        let clipboard = NSPasteboard.general.string(forType: .string)?
-            .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        guard !clipboard.isEmpty else {
-            return
-        }
-        remoteRelayAddressDraft = clipboard
     }
 
     private func connectToRemoteBridgeWithPairingCode() {
@@ -604,7 +569,6 @@ struct SettingsView: View {
 
         return !normalizedPath.hasSuffix("/relay")
     }
-    #endif
 
     // MARK: - Runtime bindings
 

@@ -6,12 +6,14 @@
 import SwiftUI
 
 struct SidebarThreadListView: View {
+    
+    @Binding var mainBodyRouter: MainContentRounter
+    
     var isFiltering: Bool = false
     let isConnected: Bool
     let isCreatingThread: Bool
     let threads: [CodexThread]
     let groups: [SidebarThreadGroup]
-    let selectedThread: CodexThread?
     let bottomContentInset: CGFloat
     let timingLabelProvider: (CodexThread) -> String?
     let diffTotalsByThreadID: [String: TurnSessionDiffTotals]
@@ -31,6 +33,13 @@ struct SidebarThreadListView: View {
     @State private var expandedSubagentParentIDs: Set<String> = []
     // Tracks project sections whose preview cap was manually lifted with Show more.
     @State private var revealedProjectGroupIDs: Set<String> = []
+
+    private var selectedThread: CodexThread? {
+        guard case .thread(let thread) = mainBodyRouter else {
+            return nil
+        }
+        return thread
+    }
 
     var body: some View {
         ScrollView {

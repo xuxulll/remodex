@@ -696,10 +696,8 @@ function contextUsageFromTokenCountPayload(payload) {
       usageRoot?.input_tokens ?? usageRoot?.inputTokens,
       usageRoot?.output_tokens ?? usageRoot?.outputTokens,
       usageRoot?.reasoning_output_tokens ?? usageRoot?.reasoningOutputTokens,
-    ]);
-  if (tokensUsed == null) {
-    return null;
-  }
+    ])
+    ?? 0;
 
   return {
     tokensUsed: Math.min(tokensUsed, tokenLimit),

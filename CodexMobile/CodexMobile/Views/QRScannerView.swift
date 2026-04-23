@@ -14,22 +14,29 @@ import UIKit
 struct QRScannerView: View {
     let onBack: (() -> Void)?
     let onScan: (CodexPairingQRPayload) -> Void
+    let onManualPairingSubmit: ((String, String, String) -> Void)?
 
     @State private var scannerError: String?
     @State private var bridgeUpdatePrompt: CodexBridgeUpdatePrompt?
     @State private var didCopyBridgeUpdateCommand = false
     @State private var hasCameraPermission = false
     @State private var isCheckingPermission = true
+    @State private var isShowingManualPairingSheet = false
+    @State private var manualRelayAddress = ""
+    @State private var manualRelayPort = ""
+    @State private var manualPairCode = ""
 
     init(
         initialBridgeUpdatePrompt: CodexBridgeUpdatePrompt? = nil,
         initialHasCameraPermission: Bool = false,
         initialIsCheckingPermission: Bool = true,
         onBack: (() -> Void)? = nil,
+        onManualPairingSubmit: ((String, String, String) -> Void)? = nil,
         onScan: @escaping (CodexPairingQRPayload) -> Void
     ) {
         self.onBack = onBack
         self.onScan = onScan
+        self.onManualPairingSubmit = onManualPairingSubmit
         _bridgeUpdatePrompt = State(initialValue: initialBridgeUpdatePrompt)
         _hasCameraPermission = State(initialValue: initialHasCameraPermission)
         _isCheckingPermission = State(initialValue: initialIsCheckingPermission)
@@ -76,6 +83,9 @@ struct QRScannerView: View {
             Button("OK", role: .cancel) { scannerError = nil }
         } message: {
             Text(scannerError ?? "Invalid QR code")
+        }
+        .sheet(isPresented: $isShowingManualPairingSheet) {
+            manualPairingEntrySheet
         }
     }
 
@@ -210,8 +220,77 @@ struct QRScannerView: View {
                 .font(AppFont.subheadline(weight: .medium))
                 .foregroundStyle(.white)
 
+            if onManualPairingSubmit != nil {
+                Button("Enter Pairing Details Manually") {
+                    isShowingManualPairingSheet = true
+                }
+                .font(AppFont.caption(weight: .semibold))
+                .foregroundStyle(.white)
+                .padding(.horizontal, 16)
+                .padding(.vertical, 10)
+                .background(
+                    RoundedRectangle(cornerRadius: 14, style: .continuous)
+                        .fill(Color.white.opacity(0.14))
+                )
+            }
+
             Spacer()
         }
+    }
+
+    private var manualPairingEntrySheet: some View {
+        NavigationStack {
+            Form {
+                Section("Relay") {
+                    TextField("Relay address", text: $manualRelayAddress)
+                        .textInputAutocapitalization(.never)
+                        .autocorrectionDisabled()
+                        .font(AppFont.mono(.body))
+
+                    TextField("Port", text: $manualRelayPort)
+                        .keyboardType(.numberPad)
+                        .font(AppFont.mono(.body))
+                }
+
+                Section("Pairing") {
+                    TextField("Pair code", text: $manualPairCode)
+                        .textInputAutocapitalization(.characters)
+                        .autocorrectionDisabled()
+                        .font(AppFont.mono(.body))
+                }
+            }
+            .navigationTitle("Manual Pairing")
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Cancel") {
+                        isShowingManualPairingSheet = false
+                    }
+                }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Connect") {
+                        submitManualPairing()
+                    }
+                }
+            }
+        }
+    }
+
+    private func submitManualPairing() {
+        guard let onManualPairingSubmit else {
+            return
+        }
+
+        let relayAddress = manualRelayAddress.trimmingCharacters(in: .whitespacesAndNewlines)
+        let relayPort = manualRelayPort.trimmingCharacters(in: .whitespacesAndNewlines)
+        let pairCode = manualPairCode.trimmingCharacters(in: .whitespacesAndNewlines)
+
+        guard !relayAddress.isEmpty, !relayPort.isEmpty, !pairCode.isEmpty else {
+            scannerError = "Enter relay address, port, and pair code."
+            return
+        }
+
+        onManualPairingSubmit(relayAddress, relayPort, pairCode)
+        isShowingManualPairingSheet = false
     }
 
     private var cameraPermissionView: some View {
@@ -496,16 +575,19 @@ import SwiftUI
 struct QRScannerView: View {
     let onBack: (() -> Void)?
     let onScan: (CodexPairingQRPayload) -> Void
+    let onManualPairingSubmit: ((String, String, String) -> Void)?
 
     init(
         initialBridgeUpdatePrompt: CodexBridgeUpdatePrompt? = nil,
         initialHasCameraPermission: Bool = false,
         initialIsCheckingPermission: Bool = true,
         onBack: (() -> Void)? = nil,
+        onManualPairingSubmit: ((String, String, String) -> Void)? = nil,
         onScan: @escaping (CodexPairingQRPayload) -> Void
     ) {
         self.onBack = onBack
         self.onScan = onScan
+        self.onManualPairingSubmit = onManualPairingSubmit
     }
 
     var body: some View {

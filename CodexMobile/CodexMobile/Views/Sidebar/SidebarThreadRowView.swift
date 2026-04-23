@@ -326,11 +326,11 @@ private enum SidebarRowPreviewFixtures {
 
 #Preview("Sidebar with Subagents") {
     SidebarThreadListView(
+        mainBodyRouter: .constant(.thread(SidebarRowPreviewFixtures.allThreads[2])),
         isConnected: true,
         isCreatingThread: false,
         threads: SidebarRowPreviewFixtures.allThreads,
         groups: SidebarRowPreviewFixtures.groups,
-        selectedThread: SidebarRowPreviewFixtures.allThreads[2], // Locke selected
         bottomContentInset: 80,
         timingLabelProvider: SidebarRowPreviewFixtures.timingLabel,
         diffTotalsByThreadID: SidebarRowPreviewFixtures.diffTotals,

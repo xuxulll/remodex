@@ -10,8 +10,8 @@ struct SidebarView: View {
     @Environment(CodexService.self) private var codex
     @Environment(\.colorScheme) private var colorScheme
 
-    @Binding var selectedThread: CodexThread?
-    @Binding var showSettings: Bool
+    @Binding var mainBodyRouter: MainContentRounter
+    
     @Binding var isSearchActive: Bool
     var showsInlineCloseButton: Bool = false
     var isVisible: Bool = true
@@ -33,6 +33,13 @@ struct SidebarView: View {
     @State private var lastDiffFingerprint: Int = 0
     @State private var lastBadgeFingerprint: Int = 0
     @State private var sidebarDebugSequence = 0
+
+    private var selectedThread: CodexThread? {
+        guard case .thread(let thread) = mainBodyRouter else {
+            return nil
+        }
+        return thread
+    }
 
     var body: some View {
         let diffTotalsByThreadID = cachedDiffTotals
@@ -58,12 +65,12 @@ struct SidebarView: View {
             .padding(.bottom, 10)
 
             SidebarThreadListView(
+                mainBodyRouter: $mainBodyRouter,
                 isFiltering: !searchText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
                 isConnected: codex.isConnected,
                 isCreatingThread: isCreatingThread,
                 threads: codex.threads,
                 groups: groupedThreads,
-                selectedThread: selectedThread,
                 bottomContentInset: 0,
                 timingLabelProvider: { SidebarRelativeTimeFormatter.compactLabel(for: $0) },
                 diffTotalsByThreadID: diffTotalsByThreadID,
@@ -84,7 +91,7 @@ struct SidebarView: View {
                     } else {
                         codex.archiveThread(thread.id)
                         if selectedThread?.id == thread.id {
-                            selectedThread = nil
+                            mainBodyRouter = .empty
                         }
                     }
                 },
@@ -194,7 +201,7 @@ struct SidebarView: View {
             Button("Delete", role: .destructive) {
                 if let thread = threadPendingDeletion {
                     if selectedThread?.id == thread.id {
-                        selectedThread = nil
+                        mainBodyRouter = .empty
                     }
                     codex.deleteThread(thread.id)
                 }
@@ -216,7 +223,7 @@ struct SidebarView: View {
                 }
             },
             message: {
-                Text(createThreadErrorMessage ?? "Please try again.")
+                Text(createThreadErrorAlertMessage)
             }
         )
     }
@@ -300,8 +307,12 @@ struct SidebarView: View {
 
     private func openSettings() {
         searchText = ""
-        showSettings = true
+        mainBodyRouter = .settings
         onClose()
+    }
+
+    private var createThreadErrorAlertMessage: String {
+        createThreadErrorMessage ?? "Please try again."
     }
 
     // Archives every live chat in the selected project group and clears the current selection if needed.
@@ -316,9 +327,13 @@ struct SidebarView: View {
         _ = codex.archiveThreadGroup(threadIDs: threadIDs)
 
         if selectedThreadWasArchived {
-            selectedThread = codex.threads.first(where: { thread in
+            if let thread = codex.threads.first(where: { thread in
                 thread.syncState == .live && !threadIDs.contains(thread.id)
-            })
+            }) {
+                mainBodyRouter = .thread(thread)
+            } else {
+                mainBodyRouter = .empty
+            }
         }
 
         projectGroupPendingArchive = nil

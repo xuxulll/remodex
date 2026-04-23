@@ -388,8 +388,6 @@ private struct TurnTimelineFooterContainer<Composer: View>: View {
 }
 
 struct TurnTimelineView<EmptyState: View, Composer: View>: View {
-    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
-
     let threadID: String
     let messages: [CodexMessage]
     let timelineChangeToken: Int
@@ -477,10 +475,9 @@ struct TurnTimelineView<EmptyState: View, Composer: View>: View {
         isThreadRunning ? Self.runningInsetBottomPadding : Self.idleInsetBottomPadding
     }
 
-    // Keeps larger accessibility text inside a slightly roomier gutter so assistant
-    // prose does not read as edge-to-edge when Dynamic Type is bumped up.
+    // Keep the chat timeline gutter stable across all runtime states.
     private var timelineHorizontalPadding: CGFloat {
-        dynamicTypeSize.isAccessibilitySize ? 20 : 16
+        16
     }
 
     private var shouldStageHeavyThreadOpen: Bool {
