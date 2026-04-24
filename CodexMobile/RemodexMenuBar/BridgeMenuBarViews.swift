@@ -1,5 +1,5 @@
 // FILE: BridgeMenuBarViews.swift
-// Purpose: Renders the menu bar "control center" UI, including the global-CLI blocker, status cards, relay controls, and action buttons.
+// Purpose: Renders the menu bar bridge status UI, including runtime health, pairing snapshot, and log shortcuts.
 // Layer: Companion app view
 // Exports: BridgeMenuBarContentView, BridgeMenuBarLabel
 // Depends on: SwiftUI, AppKit, CoreImage, BridgeMenuBarStore, BridgeControlModels
@@ -10,7 +10,6 @@ import SwiftUI
 
 struct BridgeMenuBarContentView: View {
     @ObservedObject var store: BridgeMenuBarStore
-    @State private var relayDraft = ""
     @Environment(\.colorScheme) private var colorScheme
 
     var body: some View {
@@ -19,8 +18,9 @@ struct BridgeMenuBarContentView: View {
                 headerSection
                 if store.isCLIAvailable {
                     statusSection
-                    relaySection
-                    commandSection
+                    controlsSection
+                    settingsSection
+                    sessionsSection
                     qrSection
                     logsSection
                     feedbackSection
@@ -32,12 +32,6 @@ struct BridgeMenuBarContentView: View {
         }
         .frame(width: 360, height: 600)
         .background(Color(nsColor: .windowBackgroundColor))
-        .task {
-            relayDraft = store.relayOverride
-        }
-        .onChange(of: store.relayOverride) { _, newValue in
-            relayDraft = newValue
-        }
     }
 
     // MARK: - Header
@@ -92,81 +86,140 @@ struct BridgeMenuBarContentView: View {
             }
 
             if let relay = store.snapshot?.effectiveRelayURL, !relay.isEmpty {
-                LabelValueRow(label: "Relay URL", value: relay)
+                LabelValueRow(label: "Bridge URL", value: relay)
             } else {
-                LabelValueRow(label: "Relay URL", value: "Not configured yet")
+                LabelValueRow(label: "Bridge URL", value: "Not configured yet")
             }
+
+            LabelValueRow(
+                label: "Codex URL",
+                value: store.snapshot?.bridgeStatus?.codexURL ?? "ws://127.0.0.1:9009"
+            )
+            LabelValueRow(
+                label: "Clients",
+                value: String(store.snapshot?.bridgeStatus?.connectedClientCount ?? 0)
+            )
+            LabelValueRow(
+                label: "Sessions",
+                value: String(store.snapshot?.bridgeStatus?.activeSessionCount ?? 0)
+            )
         }
         .padding(12)
         .background(cardFill, in: cardShape)
         .overlay(cardBorder)
     }
 
-    // MARK: - Relay
+    // MARK: - Controls
 
-    private var relaySection: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            sectionTitle("Relay Override")
-
-            Text("Optional. Leave empty to use the relay from saved bridge config.")
-                .font(.system(size: 11, weight: .regular))
-                .foregroundStyle(.secondary)
-
-            TextField("ws://localhost:9010/relay", text: $relayDraft)
-                .textFieldStyle(.plain)
-                .font(.system(size: 12, weight: .regular, design: .monospaced))
-                .padding(.horizontal, 12)
-                .padding(.vertical, 10)
-                .background(Color(nsColor: .textBackgroundColor).opacity(0.82), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
-                .overlay(
-                    RoundedRectangle(cornerRadius: 12, style: .continuous)
-                        .stroke(Color.primary.opacity(0.08), lineWidth: 1)
-                )
-
-            HStack(spacing: 6) {
-                CompactActionButton("Save", style: .primary) {
-                    store.saveRelayOverride(relayDraft)
-                }
-                CompactActionButton("Defaults", style: .secondary) {
-                    relayDraft = ""
-                    store.clearRelayOverride()
-                }
-            }
-        }
-        .padding(12)
-        .background(cardFill, in: cardShape)
-        .overlay(cardBorder)
-    }
-
-    // MARK: - Commands
-
-    private var commandSection: some View {
+    private var controlsSection: some View {
         VStack(alignment: .leading, spacing: 8) {
-            sectionTitle("Commands")
-
+            sectionTitle("Controls")
             HStack(spacing: 6) {
-                CompactActionButton("Start", style: .primary) {
+                CompactActionButton("Start Bridge", style: .primary) {
                     store.startBridge()
                 }
-                CompactActionButton("Stop", style: .destructive) {
+                .disabled(store.isPerformingAction)
+
+                CompactActionButton("Stop Bridge", style: .destructive) {
                     store.stopBridge()
                 }
-                CompactActionButton("Resume", style: .secondary) {
-                    store.resumeLastThread()
-                }
+                .disabled(store.isPerformingAction)
             }
 
             HStack(spacing: 6) {
-                CompactActionButton("Refresh", style: .secondary) {
-                    Task { await store.refresh(showSpinner: true) }
+                CompactActionButton("Start Codex", style: .secondary) {
+                    store.startCodex()
                 }
-                CompactActionButton("Reset Pair", style: .destructive) {
-                    store.resetPairing()
+                .disabled(store.isPerformingAction)
+
+                CompactActionButton("Stop Codex", style: .secondary) {
+                    store.stopCodex()
                 }
-                if store.updateState.isUpdateAvailable {
-                    CompactActionButton("Update", style: .primary) {
-                        store.updateBridgePackage()
+                .disabled(store.isPerformingAction)
+
+                CompactActionButton("Restart Codex", style: .secondary) {
+                    store.restartCodex()
+                }
+                .disabled(store.isPerformingAction)
+            }
+        }
+        .padding(12)
+        .background(cardFill, in: cardShape)
+        .overlay(cardBorder)
+    }
+
+    // MARK: - Settings
+
+    private var settingsSection: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            sectionTitle("Settings")
+
+            TextField("Bridge host", text: $store.runtimeSettings.bridgeListenHost)
+                .textFieldStyle(.roundedBorder)
+            Stepper(
+                "Bridge port: \(store.runtimeSettings.bridgePort)",
+                value: $store.runtimeSettings.bridgePort,
+                in: 1...65_535
+            )
+
+            TextField("Codex host", text: $store.runtimeSettings.codexListenHost)
+                .textFieldStyle(.roundedBorder)
+            Stepper(
+                "Codex port: \(store.runtimeSettings.codexPort)",
+                value: $store.runtimeSettings.codexPort,
+                in: 1...65_535
+            )
+
+            TextField("Codex executable path", text: $store.runtimeSettings.codexExecutablePath)
+                .textFieldStyle(.roundedBorder)
+            TextField(
+                "Codex launch args (space separated)",
+                text: Binding(
+                    get: { store.runtimeSettings.codexLaunchArguments.joined(separator: " ") },
+                    set: { store.runtimeSettings.codexLaunchArguments = $0.split(separator: " ").map(String.init) }
+                )
+            )
+            .textFieldStyle(.roundedBorder)
+
+            SecureField("Bridge auth token", text: $store.runtimeSettings.authToken)
+                .textFieldStyle(.roundedBorder)
+
+            Toggle("Auto-start Bridge on launch", isOn: $store.runtimeSettings.autoStartBridgeOnLaunch)
+            Toggle("Auto-start Codex on Bridge start", isOn: $store.runtimeSettings.autoStartCodexOnBridgeStart)
+            Toggle("Debug logging", isOn: $store.runtimeSettings.debugLoggingEnabled)
+
+            CompactActionButton("Save Settings", style: .primary) {
+                store.saveRuntimeSettings()
+            }
+        }
+        .padding(12)
+        .background(cardFill, in: cardShape)
+        .overlay(cardBorder)
+    }
+
+    // MARK: - Sessions
+
+    @ViewBuilder
+    private var sessionsSection: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            sectionTitle("Sessions")
+
+            if store.sessions.isEmpty {
+                Text("No active sessions.")
+                    .font(.system(size: 11))
+                    .foregroundStyle(.secondary)
+            } else {
+                ForEach(store.sessions, id: \.sessionId) { session in
+                    VStack(alignment: .leading, spacing: 4) {
+                        LabelValueRow(label: "Session", value: session.sessionId)
+                        LabelValueRow(label: "Client", value: session.clientId ?? "—")
+                        LabelValueRow(label: "Status", value: session.connectionStatus)
+                        CompactActionButton("Close Session", style: .destructive) {
+                            store.closeSession(session.sessionId)
+                        }
                     }
+                    .padding(8)
+                    .background(Color(nsColor: .textBackgroundColor).opacity(0.5), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
                 }
             }
         }

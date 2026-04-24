@@ -300,7 +300,7 @@ private final class NativeSecureChannelService: SecureTransporting {
 }
 
 private final class NativeCodexRuntimeHost: CodexHosting {
-    private static let localAppServerListenURL = "ws://0.0.0.0:\(nativeBridgePort)"
+    private static let localAppServerListenURL = "ws://127.0.0.1:\(nativeBridgePort)"
     private static let localAppServerReadyURL = URL(string: "http://127.0.0.1:\(nativeBridgePort)/readyz")
     private static let startupTimeoutNanoseconds: UInt64 = 8_000_000_000
     private static let startupPollIntervalNanoseconds: UInt64 = 200_000_000
@@ -904,32 +904,18 @@ private final class NativeBridgeRuntimeController: BridgeRuntimeControlling {
 }
 
 final class BridgeControlService {
-    private let runner: ShellCommandRunner
-    private let runtimeHost: NativeCodexRuntimeHost
-    private let runtimeController: NativeBridgeRuntimeController
+    private let facade: BridgeRuntimeFacade
 
-    init(runner: ShellCommandRunner = ShellCommandRunner()) {
-        let stateStore = NativeBridgeStateStore()
-        let secureChannel = NativeSecureChannelService()
-        let pairingService = NativePairingService()
-        let runtimeHost = NativeCodexRuntimeHost(runner: runner, stateStore: stateStore)
-
-        self.runner = runner
-        self.runtimeHost = runtimeHost
-        self.runtimeController = NativeBridgeRuntimeController(
-            stateStore: stateStore,
-            codexHost: runtimeHost,
-            secureChannel: secureChannel,
-            pairingService: pairingService
-        )
+    init(runner _: ShellCommandRunner = ShellCommandRunner()) {
+        facade = .shared
     }
 
     func detectCLIAvailability() async -> BridgeCLIAvailability {
-        await runtimeHost.runtimeAvailability()
+        await facade.detectCLIAvailability()
     }
 
     func loadSnapshot(relayOverride: String?) async throws -> BridgeSnapshot {
-        let snapshot = try await runtimeController.status()
+        let snapshot = await facade.loadSnapshot()
         guard let relayOverride,
               !relayOverride.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
             return snapshot
@@ -958,23 +944,72 @@ final class BridgeControlService {
     }
 
     func loadTrustedState() async throws -> BridgeTrustedState {
-        try await runtimeController.trustedState()
+        let snapshot = await facade.loadSnapshot()
+        if let payload = snapshot.pairingSession?.pairingPayload {
+            return BridgeTrustedState(
+                macDeviceId: payload.macDeviceId,
+                macIdentityPublicKey: payload.macIdentityPublicKey,
+                relaySessionId: payload.sessionId,
+                keyEpoch: 1,
+                trustedPhoneDeviceID: nil,
+                lastUpdatedAtISO8601: BridgeSnapshot.isoTimestamp()
+            )
+        }
+
+        return BridgeTrustedState(
+            macDeviceId: UUID().uuidString,
+            macIdentityPublicKey: UUID().uuidString,
+            relaySessionId: UUID().uuidString,
+            keyEpoch: 1,
+            trustedPhoneDeviceID: nil,
+            lastUpdatedAtISO8601: BridgeSnapshot.isoTimestamp()
+        )
     }
 
     func startBridge(relayOverride _: String?) async throws {
-        try await runtimeController.start()
+        try await facade.startBridge()
     }
 
     func stopBridge(relayOverride _: String?) async throws {
-        try await runtimeController.stop()
+        await facade.stopBridge()
     }
 
     func resumeLastThread(relayOverride _: String?) async throws {
-        try await runtimeController.resumeThread()
+        throw BridgeControlError.unsupportedOperation(
+            "Resume last thread is not available in bridge v2 command mode."
+        )
     }
 
     func resetPairing(relayOverride _: String?) async throws {
-        try await runtimeController.resetPairing()
+        await facade.resetPairing()
+    }
+
+    func restartCodex() async throws {
+        try await facade.restartCodex()
+    }
+
+    func startCodex() async throws {
+        try await facade.startCodex()
+    }
+
+    func stopCodex() async {
+        await facade.stopCodex()
+    }
+
+    func listActiveSessions() async -> [BridgeSessionSummary] {
+        await facade.listSessions()
+    }
+
+    func closeActiveSession(_ sessionID: String) async {
+        await facade.closeSession(sessionID)
+    }
+
+    func loadRuntimeSettings() async -> BridgeRuntimeSettings {
+        await facade.loadSettings()
+    }
+
+    func saveRuntimeSettings(_ settings: BridgeRuntimeSettings) async {
+        await facade.saveSettings(settings)
     }
 
     func updateBridgePackage() async throws {
@@ -992,7 +1027,20 @@ final class BridgeControlService {
     }
 
     func forceStopBridgeForTermination() {
-        runtimeHost.shutdownSynchronously()
+        let semaphore = DispatchSemaphore(value: 0)
+        Task.detached { [facade] in
+            await facade.shutdownForTermination()
+            semaphore.signal()
+        }
+        _ = semaphore.wait(timeout: .now() + 2.0)
+    }
+}
+
+private extension BridgeSnapshot {
+    static func isoTimestamp(_ date: Date = Date()) -> String {
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        return formatter.string(from: date)
     }
 }
 

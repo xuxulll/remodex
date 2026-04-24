@@ -411,6 +411,10 @@ extension ContentViewModel {
             do {
                 try await BridgeControlService().startBridge(relayOverride: nil)
             } catch {
+                if isRetryableLocalBridgeBootstrapError(error) {
+                    codex.lastErrorMessage = nil
+                    return localBridgeURL
+                }
                 codex.lastErrorMessage = error.localizedDescription
                 return nil
             }
@@ -551,6 +555,21 @@ extension ContentViewModel {
 
         let nsError = error as NSError
         return nsError.domain == NSURLErrorDomain && nsError.code == NSURLErrorCancelled
+    }
+
+    // Keeps launch reconnect resilient when local app-server bootstrap fails transiently.
+    private func isRetryableLocalBridgeBootstrapError(_ error: Error) -> Bool {
+        let message = error.localizedDescription.lowercased()
+        let retryableFragments = [
+            "bridge server is already running",
+            "already running",
+            "exited before it became ready",
+            "timed out waiting for codex app-server readiness",
+            "connection closed via error",
+            "failed to connect to websocket",
+            "handshake eof",
+        ]
+        return retryableFragments.contains { message.contains($0) }
     }
 
     private var shouldContinueManualReconnect: Bool {

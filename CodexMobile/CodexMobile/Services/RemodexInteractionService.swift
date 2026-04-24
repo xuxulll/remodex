@@ -19,11 +19,7 @@ final class RemodexInteractionService {
         #if os(macOS)
         self.codexService.localBridgeServerURL = RemodexMacBridgeRuntime.localBridgeWebSocketURL
         Task { @MainActor in
-            do {
-                try await self.codexService.startLocalMacBridge()
-            } catch {
-                return
-            }
+            await self.macBridgeRuntime.startIfNeeded()
         }
         #endif
     }
@@ -50,10 +46,24 @@ final class RemodexInteractionService {
 @MainActor
 final class RemodexMacBridgeRuntime {
     static let localBridgeWebSocketURL = "ws://127.0.0.1:9010/"
+    private static let watchdogIntervalNanoseconds: UInt64 = 5_000_000_000
     private let bridgeControlService = BridgeControlService()
+    private var watchdogTask: Task<Void, Never>?
+    private var isTerminating = false
 
     // Boots the native macOS bridge host so the app can connect directly as a local client.
     func startIfNeeded() async {
+        guard !isTerminating else {
+            return
+        }
+
+        let settings = await bridgeControlService.loadRuntimeSettings()
+        guard settings.autoStartBridgeOnLaunch else {
+            return
+        }
+
+        ensureWatchdogRunning()
+
         do {
             try await bridgeControlService.startBridge(relayOverride: nil)
         } catch {
@@ -62,11 +72,42 @@ final class RemodexMacBridgeRuntime {
     }
 
     func stopIfNeeded() async {
+        watchdogTask?.cancel()
+        watchdogTask = nil
         try? await bridgeControlService.stopBridge(relayOverride: nil)
     }
 
     func stopForTermination() {
+        isTerminating = true
+        watchdogTask?.cancel()
+        watchdogTask = nil
         bridgeControlService.forceStopBridgeForTermination()
+    }
+
+    private func ensureWatchdogRunning() {
+        guard watchdogTask == nil else {
+            return
+        }
+
+        watchdogTask = Task { [weak self] in
+            guard let self else {
+                return
+            }
+
+            while !Task.isCancelled {
+                do {
+                    try await Task.sleep(nanoseconds: Self.watchdogIntervalNanoseconds)
+                } catch {
+                    return
+                }
+
+                guard !Task.isCancelled, !self.isTerminating else {
+                    return
+                }
+
+                try? await self.bridgeControlService.startBridge(relayOverride: nil)
+            }
+        }
     }
 }
 #endif

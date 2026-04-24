@@ -75,6 +75,9 @@ extension CodexService {
             lastRawMessage = rawText
             handleIncomingRPCMessage(message)
         case .decodeFailed:
+            if bridgeProtocolEnabled, handleBridgeProtocolIncomingEvent(rawText) {
+                return
+            }
             lastErrorMessage = "Unable to decode server payload"
         case .invalidUTF8:
             break

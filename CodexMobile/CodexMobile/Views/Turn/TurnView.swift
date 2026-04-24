@@ -153,7 +153,7 @@ struct TurnView: View {
             )
         } as (() -> Void)? : nil)
         .environment(\.inlineCommitAndPushPhase, viewModel.inlineCommitAndPushPhase)
-        .navigationTitle(resolvedThread.displayTitle)
+        .navigationTitle("")
         .toolbar {
             TurnToolbarContent(
                 displayTitle: resolvedThread.displayTitle,
@@ -186,6 +186,7 @@ struct TurnView: View {
                 isShowingPathSheet: $isShowingThreadPathSheet
             )
         }
+        .toolbarRole(.editor)
         .overlay {
             if isShowingWorktreeHandoff {
                 TurnWorktreeHandoffOverlay(

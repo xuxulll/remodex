@@ -30,6 +30,8 @@ final class BridgeMenuBarStore: ObservableObject {
     @Published var snapshot: BridgeSnapshot?
     @Published var updateState = BridgePackageUpdateState.empty
     @Published var cliAvailability: BridgeCLIAvailability = .checking
+    @Published var runtimeSettings: BridgeRuntimeSettings = .default
+    @Published var sessions: [BridgeSessionSummary] = []
     @Published var relayOverride: String
     @Published var isRefreshing = false
     @Published var isPerformingAction = false
@@ -84,7 +86,7 @@ final class BridgeMenuBarStore: ObservableObject {
 
     func startBridge() {
         let previousPairingDate = snapshot?.pairingSession?.createdDate
-        runAction(successMessage: "Bridge avviato.") {
+        runAction(successMessage: "Bridge started.") {
             try await self.requireCLIAvailability()
             try await self.service.startBridge(relayOverride: self.effectiveRelayOverride)
             try await self.waitForFreshPairing(after: previousPairingDate)
@@ -92,9 +94,32 @@ final class BridgeMenuBarStore: ObservableObject {
     }
 
     func stopBridge() {
-        runAction(successMessage: "Bridge fermato.") {
+        runAction(successMessage: "Bridge stopped.") {
             try await self.requireCLIAvailability()
             try await self.service.stopBridge(relayOverride: self.effectiveRelayOverride)
+            try await self.refreshAfterAction()
+        }
+    }
+
+    func startCodex() {
+        runAction(successMessage: "Codex started.") {
+            try await self.requireCLIAvailability()
+            try await self.service.startCodex()
+            try await self.refreshAfterAction()
+        }
+    }
+
+    func stopCodex() {
+        runAction(successMessage: "Codex stopped.") {
+            await self.service.stopCodex()
+            try await self.refreshAfterAction()
+        }
+    }
+
+    func restartCodex() {
+        runAction(successMessage: "Codex restarted.") {
+            try await self.requireCLIAvailability()
+            try await self.service.restartCodex()
             try await self.refreshAfterAction()
         }
     }
@@ -139,13 +164,29 @@ final class BridgeMenuBarStore: ObservableObject {
     }
 
     func openStdoutLog() {
-        guard let snapshot else { return }
+        guard let snapshot, !snapshot.stdoutLogPath.isEmpty else { return }
         NSWorkspace.shared.open(URL(fileURLWithPath: snapshot.stdoutLogPath))
     }
 
     func openStderrLog() {
-        guard let snapshot else { return }
+        guard let snapshot, !snapshot.stderrLogPath.isEmpty else { return }
         NSWorkspace.shared.open(URL(fileURLWithPath: snapshot.stderrLogPath))
+    }
+
+    func saveRuntimeSettings() {
+        let normalized = normalizedSettings(runtimeSettings)
+        runtimeSettings = normalized
+        Task {
+            await service.saveRuntimeSettings(normalized)
+            await refresh(showSpinner: true)
+        }
+    }
+
+    func closeSession(_ sessionID: String) {
+        Task {
+            await service.closeActiveSession(sessionID)
+            await refresh(showSpinner: true)
+        }
     }
 
     private var effectiveRelayOverride: String? {
@@ -170,6 +211,7 @@ final class BridgeMenuBarStore: ObservableObject {
 
     // Performs the first load in two stages so the UI can show a dedicated "install the CLI" blocker.
     private func bootstrap() async {
+        runtimeSettings = await service.loadRuntimeSettings()
         let cliAvailability = await refreshCLIAvailability()
         guard cliAvailability.isAvailable else {
             snapshot = nil
@@ -251,6 +293,7 @@ final class BridgeMenuBarStore: ObservableObject {
         do {
             let snapshot = try await service.loadSnapshot(relayOverride: effectiveRelayOverride)
             self.snapshot = snapshot
+            self.sessions = await service.listActiveSessions()
             self.errorMessage = ""
             self.updateState = await resolveUpdateState(installedVersion: snapshot.currentVersion)
             return snapshot
@@ -262,6 +305,33 @@ final class BridgeMenuBarStore: ObservableObject {
             errorMessage = error.localizedDescription
             throw error
         }
+    }
+
+    private func normalizedSettings(_ settings: BridgeRuntimeSettings) -> BridgeRuntimeSettings {
+        var normalized = settings
+        normalized.bridgeListenHost = normalized.bridgeListenHost.trimmingCharacters(in: .whitespacesAndNewlines)
+        if normalized.bridgeListenHost.isEmpty {
+            normalized.bridgeListenHost = "0.0.0.0"
+        }
+        normalized.codexListenHost = normalized.codexListenHost.trimmingCharacters(in: .whitespacesAndNewlines)
+        if normalized.codexListenHost.isEmpty {
+            normalized.codexListenHost = "127.0.0.1"
+        }
+        normalized.codexExecutablePath = normalized.codexExecutablePath.trimmingCharacters(in: .whitespacesAndNewlines)
+        if normalized.codexExecutablePath.isEmpty {
+            normalized.codexExecutablePath = "codex"
+        }
+        normalized.authToken = normalized.authToken.trimmingCharacters(in: .whitespacesAndNewlines)
+        if normalized.authToken.isEmpty {
+            normalized.authToken = UUID().uuidString.replacingOccurrences(of: "-", with: "")
+        }
+        if !(1...65_535).contains(normalized.bridgePort) {
+            normalized.bridgePort = 9010
+        }
+        if !(1...65_535).contains(normalized.codexPort) {
+            normalized.codexPort = 9009
+        }
+        return normalized
     }
 
     // Treats a missing fresh QR as a real start failure so the menu bar never reports a false success.

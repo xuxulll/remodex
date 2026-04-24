@@ -99,6 +99,12 @@ extension CodexService {
                 try await performSecureHandshake()
             }
 
+            await configureBridgeProtocolTransportIfNeeded(
+                serverURL: normalizedServerURL,
+                token: trimmedToken,
+                bypassSecureTransport: bypassSecureTransport
+            )
+
             isConnected = true
             shouldAutoReconnectOnForeground = false
             connectionRecoveryState = .idle
@@ -189,6 +195,29 @@ extension CodexService {
         resumedThreadIDs.removeAll()
         resetSecureTransportState()
         bypassSecureTransportForCurrentConnection = false
+        bridgeProtocolEnabled = false
+        bridgeProtocolToken = ""
+        for continuation in bridgeProtocolPendingCompletionByMessageID.values {
+            continuation.resume(throwing: CodexServiceError.disconnected)
+        }
+        bridgeProtocolPendingCompletionByMessageID.removeAll()
+        bridgeProtocolPendingThreadIDByMessageID.removeAll()
+        bridgeProtocolPendingTurnIDByMessageID.removeAll()
+        for continuation in bridgeProtocolPendingRPCByRequestID.values {
+            continuation.resume(throwing: CodexServiceError.disconnected)
+        }
+        bridgeProtocolPendingRPCByRequestID.removeAll()
+        bridgeProtocolPendingRPCThreadIDByMessageID.removeAll()
+        bridgeProtocolPendingRPCRequestIDByMessageID.removeAll()
+        bridgeProtocolControlBootstrapMessageID = nil
+        let bridgeControlWaiters = bridgeProtocolControlBootstrapWaiters
+        bridgeProtocolControlBootstrapWaiters.removeAll()
+        for waiter in bridgeControlWaiters {
+            waiter.resume(throwing: CodexServiceError.disconnected)
+        }
+        bridgeProtocolSessionIDByThreadID.removeAll()
+        bridgeProtocolThreadIDs.removeAll()
+        requestTransportOverride = nil
         cancelTrustedSessionResolve()
 
         failAllPendingRequests(with: CodexServiceError.disconnected)
@@ -216,6 +245,42 @@ extension CodexService {
         }
 
         return canonicalServerIdentity(for: local) == canonicalServerIdentity(for: target)
+    }
+
+    func configureBridgeProtocolTransportIfNeeded(
+        serverURL: String,
+        token: String,
+        bypassSecureTransport: Bool
+    ) async {
+        guard bypassSecureTransport,
+              let localURL = normalizedLocalBridgeServerURL,
+              let target = URL(string: serverURL),
+              let local = URL(string: localURL),
+              canonicalServerIdentity(for: local) == canonicalServerIdentity(for: target) else {
+            bridgeProtocolEnabled = false
+            bridgeProtocolToken = ""
+            requestTransportOverride = nil
+            return
+        }
+
+        bridgeProtocolEnabled = true
+        let normalizedToken = token.trimmingCharacters(in: .whitespacesAndNewlines)
+        if normalizedToken.isEmpty {
+            #if os(macOS)
+            let settings = await BridgeControlService().loadRuntimeSettings()
+            bridgeProtocolToken = settings.authToken
+            #else
+            bridgeProtocolToken = normalizedToken
+            #endif
+        } else {
+            bridgeProtocolToken = normalizedToken
+        }
+        requestTransportOverride = { [weak self] method, params in
+            guard let self else {
+                throw CodexServiceError.disconnected
+            }
+            return try await self.sendBridgeProtocolRequest(method: method, params: params)
+        }
     }
 
     func updateBridgeKeepMacAwakePreference(_ enabled: Bool) async {

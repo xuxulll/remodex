@@ -453,6 +453,19 @@ final class CodexService {
     var pendingRequestTimeoutTaskByID: [String: Task<Void, Never>] = [:]
     // Test hook: intercepts outbound RPC requests without requiring a live socket.
     @ObservationIgnored var requestTransportOverride: ((String, JSONValue?) async throws -> RPCMessage)?
+    @ObservationIgnored var bridgeProtocolPendingCompletionByMessageID: [String: CheckedContinuation<Void, Error>] = [:]
+    @ObservationIgnored var bridgeProtocolPendingThreadIDByMessageID: [String: String] = [:]
+    @ObservationIgnored var bridgeProtocolPendingTurnIDByMessageID: [String: String] = [:]
+    @ObservationIgnored var bridgeProtocolPendingRPCByRequestID: [String: CheckedContinuation<RPCMessage, Error>] = [:]
+    @ObservationIgnored var bridgeProtocolPendingRPCThreadIDByMessageID: [String: String] = [:]
+    @ObservationIgnored var bridgeProtocolPendingRPCRequestIDByMessageID: [String: String] = [:]
+    @ObservationIgnored var bridgeProtocolSessionIDByThreadID: [String: String] = [:]
+    @ObservationIgnored var bridgeProtocolControlBootstrapMessageID: String?
+    @ObservationIgnored var bridgeProtocolControlBootstrapWaiters: [CheckedContinuation<Void, Error>] = []
+    @ObservationIgnored var bridgeProtocolThreadIDs: Set<String> = []
+    @ObservationIgnored var bridgeProtocolClientID = UUID().uuidString
+    @ObservationIgnored var bridgeProtocolToken = ""
+    @ObservationIgnored var bridgeProtocolEnabled = false
     // Test hook: stubs trusted-session lookup without performing a real relay HTTP request.
     @ObservationIgnored var trustedSessionResolverOverride: (() async throws -> CodexTrustedSessionResolveResponse)?
     // Keeps the trusted-session HTTP lookup cancellable so manual retry can preempt a stuck resolve.

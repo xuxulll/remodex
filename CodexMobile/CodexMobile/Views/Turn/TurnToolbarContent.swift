@@ -46,12 +46,12 @@ struct TurnToolbarContent: ToolbarContent {
             && !isThreadActionLoading
         let canTapNewChat = onTapNewChat != nil && !isThreadActionLoading
 
-        ToolbarItem(placement: .principal) {
+        ToolbarItem(placement: .navigation) {
             VStack(alignment: .leading, spacing: 1) {
                 Text(displayTitle)
                     .font(AppFont.headline())
                     .lineLimit(1)
-                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.horizontal)
 
                 if let context = navigationContext {
                     Button {
@@ -63,12 +63,11 @@ struct TurnToolbarContent: ToolbarContent {
                             .foregroundStyle(.secondary)
                             .lineLimit(1)
                             .truncationMode(.middle)
-                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .padding(.horizontal)
                     }
                     .buttonStyle(.plain)
                 }
             }
-            .frame(maxWidth: .infinity, alignment: .leading)
         }
 
         if showsThreadActions {

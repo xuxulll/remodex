@@ -62,6 +62,35 @@ struct BridgeRuntimeStatus: Codable, Equatable {
     let pid: Int?
     let lastError: String?
     let updatedAt: String?
+    let connectedClientCount: Int?
+    let activeSessionCount: Int?
+    let bridgeURL: String?
+    let codexURL: String?
+    let recentErrors: [String]?
+
+    init(
+        state: String?,
+        connectionStatus: String?,
+        pid: Int?,
+        lastError: String?,
+        updatedAt: String?,
+        connectedClientCount: Int? = nil,
+        activeSessionCount: Int? = nil,
+        bridgeURL: String? = nil,
+        codexURL: String? = nil,
+        recentErrors: [String]? = nil
+    ) {
+        self.state = state
+        self.connectionStatus = connectionStatus
+        self.pid = pid
+        self.lastError = lastError
+        self.updatedAt = updatedAt
+        self.connectedClientCount = connectedClientCount
+        self.activeSessionCount = activeSessionCount
+        self.bridgeURL = bridgeURL
+        self.codexURL = codexURL
+        self.recentErrors = recentErrors
+    }
 }
 
 struct BridgePairingSession: Codable, Equatable {

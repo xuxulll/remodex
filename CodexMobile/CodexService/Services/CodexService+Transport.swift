@@ -124,6 +124,10 @@ extension CodexService {
 
     // Sends a fire-and-forget RPC notification.
     func sendNotification(method: String, params: JSONValue?) async throws {
+        if bridgeProtocolEnabled, method == "initialized" {
+            return
+        }
+
         let notification = RPCMessage(
             jsonrpc: nil,
             id: nil,

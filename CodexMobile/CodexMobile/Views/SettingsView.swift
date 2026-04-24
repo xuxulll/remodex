@@ -27,7 +27,6 @@ struct SettingsView: View {
     @State private var isConnectingRemoteBridge = false
     @State private var remotePairingErrorMessage: String?
     @State private var isRefreshingBridgeInfo = false
-    @State private var isUpdatingLocalBridge = false
     @State private var isUpdatingCaffeinate = false
     @State private var prefersRemoteBridge = false
 
@@ -171,11 +170,6 @@ struct SettingsView: View {
                 )
             }
 
-            #if os(macOS)
-            Toggle("Use Remote Bridge", isOn: useRemoteBridgeToggle)
-                .tint(settingsAccentColor)
-            #endif
-
             HStack(spacing: 8) {
                 Text("Status")
                 Spacer()
@@ -197,7 +191,15 @@ struct SettingsView: View {
 
             bridgeInfoRow(title: "Mac Bridge Version", value: installedBridgeVersion, monospaced: true)
 
-            if codex.isConnected {
+#if os(macOS)
+            if shouldShowLocalPairingCode {
+                if let pairingCode = nonEmpty(codex.bridgeSettingsSnapshot?.pairingCode) {
+                    bridgeInfoRow(title: "Local Pairing Code", value: pairingCode, monospaced: true)
+                }
+            }
+#endif
+            
+            if shouldShowBridgeDiagnostics {
                 Divider()
                 bridgeConnectedDevicesSection
                 Divider()
@@ -205,14 +207,10 @@ struct SettingsView: View {
                 Divider()
             }
 
-            if let error = nonEmpty(codex.bridgeSettingsErrorMessage) ?? nonEmpty(codex.lastErrorMessage) {
+            if let error = bridgeErrorMessageForDisplay {
                 Text(error)
                     .font(AppFont.caption())
                     .foregroundStyle(.orange)
-            }
-
-            SettingsButton("Refresh Bridge Info", isLoading: isRefreshingBridgeInfo) {
-                refreshBridgeInfo()
             }
 
             if codex.isConnected {
@@ -232,25 +230,6 @@ struct SettingsView: View {
                 .foregroundStyle(.secondary)
             }
 
-            #if os(macOS)
-            if isConnectedToLocalBridge {
-                if let pairingCode = nonEmpty(codex.bridgeSettingsSnapshot?.pairingCode) {
-                    bridgeInfoRow(title: "Local Pairing Code", value: pairingCode, monospaced: true)
-                }
-            }
-            localBridgeControlSection
-            #endif
-
-            if isConnectedToRemoteBridge {
-                SettingsButton("Disconnect", role: .destructive) {
-                    HapticFeedback.shared.triggerImpactFeedback()
-                    disconnectRelay()
-                }
-            } else if !codex.isConnected {
-                SettingsButton("Set Up Remote Bridge") {
-                    prepareRemoteBridgeSheet()
-                }
-            }
         }
     }
 
@@ -315,16 +294,42 @@ struct SettingsView: View {
             return snapshotRelay
         }
         #if os(macOS)
-        if isConnectedToLocalBridge {
+        if codex.macConnectionTarget == .localThisMac {
             return codex.normalizedLocalBridgeServerURL
         }
         #endif
         return codex.normalizedRelayURL
     }
 
+    private var bridgeErrorMessageForDisplay: String? {
+        if let bridgeError = nonEmpty(codex.bridgeSettingsErrorMessage) {
+            return bridgeError
+        }
+
+        guard let fallbackError = nonEmpty(codex.lastErrorMessage) else {
+            return nil
+        }
+
+        if fallbackError.caseInsensitiveCompare("WebSocket not connected") == .orderedSame {
+            return nil
+        }
+
+        return fallbackError
+    }
+
     private var latestBridgeLogs: [String] {
         Array(codex.runtimeDebugLogEntries.suffix(10))
     }
+
+    private var shouldShowBridgeDiagnostics: Bool {
+        codex.bridgeSettingsSnapshot != nil || !latestBridgeLogs.isEmpty
+    }
+
+    #if os(macOS)
+    private var shouldShowLocalPairingCode: Bool {
+        codex.macConnectionTarget == .localThisMac
+    }
+    #endif
 
     private var isConnectedToRemoteBridge: Bool {
         codex.isConnected && !isConnectedToLocalBridge
@@ -343,6 +348,8 @@ struct SettingsView: View {
     @ViewBuilder
     private var bridgeConnectedDevicesSection: some View {
         let clients = codex.bridgeSettingsSnapshot?.currentClients ?? []
+        let pairedDeviceIDs = codex.bridgeSettingsSnapshot?.pairedClientDeviceIds ?? []
+        let connectedIDs = Set(clients.map(\.clientDeviceId))
         Text("Connected Devices (\(clients.count))")
             .font(AppFont.caption(weight: .semibold))
             .foregroundStyle(.secondary)
@@ -354,6 +361,22 @@ struct SettingsView: View {
         } else {
             ForEach(clients, id: \.clientDeviceId) { client in
                 connectedClientRow(client)
+            }
+        }
+
+        Divider()
+
+        Text("Paired Devices (\(pairedDeviceIDs.count))")
+            .font(AppFont.caption(weight: .semibold))
+            .foregroundStyle(.secondary)
+
+        if pairedDeviceIDs.isEmpty {
+            Text("No paired devices recorded on this bridge.")
+                .font(AppFont.caption())
+                .foregroundStyle(.secondary)
+        } else {
+            ForEach(pairedDeviceIDs, id: \.self) { deviceID in
+                pairedDeviceRow(deviceID: deviceID, isConnected: connectedIDs.contains(deviceID))
             }
         }
     }
@@ -425,6 +448,19 @@ struct SettingsView: View {
             }
             Spacer()
             SettingsStatusPill(label: client.isResumed ? "Resumed" : "Handshaking")
+        }
+        .padding(.vertical, 2)
+    }
+
+    @ViewBuilder
+    private func pairedDeviceRow(deviceID: String, isConnected: Bool) -> some View {
+        HStack(spacing: 10) {
+            Text(deviceID)
+                .font(AppFont.mono(.caption))
+                .foregroundStyle(.primary)
+                .lineLimit(1)
+            Spacer()
+            SettingsStatusPill(label: isConnected ? "Connected" : "Paired")
         }
         .padding(.vertical, 2)
     }
@@ -561,58 +597,6 @@ struct SettingsView: View {
         )
     }
 
-    @ViewBuilder
-    private var localBridgeControlSection: some View {
-        Text("Local Bridge Controls")
-            .font(AppFont.caption(weight: .semibold))
-            .foregroundStyle(.secondary)
-
-        HStack(spacing: 8) {
-            SettingsButton("Start", isLoading: isUpdatingLocalBridge) {
-                updateLocalBridge(action: .start)
-            }
-            SettingsButton("Stop", isLoading: isUpdatingLocalBridge) {
-                updateLocalBridge(action: .stop)
-            }
-            SettingsButton("Restart", isLoading: isUpdatingLocalBridge) {
-                updateLocalBridge(action: .restart)
-            }
-        }
-    }
-
-    private enum LocalBridgeAction {
-        case start
-        case stop
-        case restart
-    }
-
-    private func updateLocalBridge(action: LocalBridgeAction) {
-        guard !isUpdatingLocalBridge else { return }
-        isUpdatingLocalBridge = true
-        Task {
-            do {
-                switch action {
-                case .start:
-                    try await codex.startLocalMacBridge()
-                case .stop:
-                    try await codex.stopLocalMacBridge()
-                case .restart:
-                    try await codex.stopLocalMacBridge()
-                    try await codex.startLocalMacBridge()
-                }
-                await codex.refreshBridgeSettingsSnapshot()
-                await MainActor.run {
-                    codex.bridgeSettingsErrorMessage = nil
-                    isUpdatingLocalBridge = false
-                }
-            } catch {
-                await MainActor.run {
-                    codex.bridgeSettingsErrorMessage = error.localizedDescription
-                    isUpdatingLocalBridge = false
-                }
-            }
-        }
-    }
     #endif
 
     private func reconnectAfterConnectionTargetSwitchIfNeeded() async {

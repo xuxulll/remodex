@@ -240,9 +240,15 @@ extension CodexService {
         }
         #endif
 
+        if codexTransportMode == .spawn {
+            bridgeSettingsSnapshot = legacyBridgeSettingsSnapshot()
+            bridgeSettingsErrorMessage = nil
+            return
+        }
+
         if !supportsBridgeSettingsRead {
             bridgeSettingsSnapshot = legacyBridgeSettingsSnapshot()
-            bridgeSettingsErrorMessage = unsupportedBridgeSettingsMessage()
+            bridgeSettingsErrorMessage = nil
             return
         }
 
@@ -256,7 +262,11 @@ extension CodexService {
         } catch {
             if consumeUnsupportedBridgeSettingsRead(error) {
                 bridgeSettingsSnapshot = legacyBridgeSettingsSnapshot()
-                bridgeSettingsErrorMessage = unsupportedBridgeSettingsMessage()
+                bridgeSettingsErrorMessage = nil
+                return
+            }
+            if shouldSuppressBridgeSettingsError(error) {
+                bridgeSettingsErrorMessage = nil
                 return
             }
             bridgeSettingsErrorMessage = error.localizedDescription
@@ -1003,26 +1013,11 @@ extension CodexService {
         )
         let pairingPayload = decodeBridgePairingPayload(from: pairingPayloadObject)
 
-        let rawClients = firstArrayValue(
-            in: payloadObject,
-            keys: ["currentClients", "current_clients", "connectedClients", "connected_clients", "clients"]
-        ) ?? []
-        let clients = rawClients.compactMap { clientValue -> CodexBridgeConnectedClient? in
-            guard let clientObject = clientValue.objectValue,
-                  let clientDeviceId = firstStringValue(in: clientObject, keys: ["clientDeviceId", "client_device_id"]) else {
-                return nil
-            }
-            let keyEpoch = firstIntValue(in: clientObject, keys: ["keyEpoch", "key_epoch"]) ?? 0
-            let isResumed = firstBoolValue(in: clientObject, keys: ["isResumed", "is_resumed"]) ?? false
-            return CodexBridgeConnectedClient(
-                clientDeviceId: clientDeviceId,
-                clientType: firstStringValue(in: clientObject, keys: ["clientType", "client_type"])
-                    .flatMap(CodexSecureClientType.init(rawValue:)),
-                clientName: firstStringValue(in: clientObject, keys: ["clientName", "client_name"]),
-                keyEpoch: keyEpoch,
-                isResumed: isResumed
-            )
-        }
+        let clients = decodeBridgeConnectedClients(from: payloadObject)
+        let pairedClientDeviceIDs = mergeUniqueDeviceIDs(
+            decodeBridgePairedClientDeviceIds(from: payloadObject),
+            clients.map(\.clientDeviceId)
+        )
 
         return CodexBridgeSettingsSnapshot(
             macAppVersion: firstStringValue(
@@ -1042,7 +1037,7 @@ extension CodexService {
                 in: payloadObject,
                 keys: ["bridgeConnectionStatus", "bridge_connection_status"]
             ),
-            pairedClientDeviceIds: decodeBridgePairedClientDeviceIds(from: payloadObject),
+            pairedClientDeviceIds: pairedClientDeviceIDs,
             currentClients: clients,
             connectedClientCount: firstIntValue(in: payloadObject, keys: ["connectedClientCount", "connected_client_count"]) ?? clients.count,
             secureChannelReady: firstBoolValue(in: payloadObject, keys: ["secureChannelReady", "secure_channel_ready"]) ?? false
@@ -1073,17 +1068,201 @@ extension CodexService {
     }
 
     private func decodeBridgePairedClientDeviceIds(from payloadObject: IncomingParamsObject) -> [String] {
-        let values = firstArrayValue(
-            in: payloadObject,
-            keys: ["pairedClientDeviceIds", "paired_client_device_ids"]
-        ) ?? []
-        return values.compactMap { value in
-            guard let stringValue = value.stringValue?.trimmingCharacters(in: .whitespacesAndNewlines),
-                  !stringValue.isEmpty else {
-                return nil
+        let keys = [
+            "pairedClientDeviceIds",
+            "paired_client_device_ids",
+            "pairedClients",
+            "paired_clients",
+            "trustedClientDeviceIds",
+            "trusted_client_device_ids",
+        ]
+        let root = JSONValue.object(payloadObject)
+        var collectedDeviceIDs: [String] = []
+
+        for key in keys {
+            guard let rawValue = firstValue(forKey: key, in: root, maxDepth: 4) else {
+                continue
             }
-            return stringValue
+            collectedDeviceIDs.append(contentsOf: decodeDeviceIDs(from: rawValue))
         }
+
+        return mergeUniqueDeviceIDs(collectedDeviceIDs, [])
+    }
+
+    private func decodeBridgeConnectedClients(from payloadObject: IncomingParamsObject) -> [CodexBridgeConnectedClient] {
+        let clientKeys = [
+            "currentClients",
+            "current_clients",
+            "connectedClients",
+            "connected_clients",
+            "clients",
+            "activeClients",
+            "active_clients",
+        ]
+        let root = JSONValue.object(payloadObject)
+        var collectedValues: [JSONValue] = []
+
+        for key in clientKeys {
+            guard let rawValue = firstValue(forKey: key, in: root, maxDepth: 4) else {
+                continue
+            }
+            collectedValues.append(contentsOf: decodeClientValues(from: rawValue))
+        }
+
+        if collectedValues.isEmpty {
+            return []
+        }
+
+        var dedupedByID: [String: CodexBridgeConnectedClient] = [:]
+        var order: [String] = []
+
+        for value in collectedValues {
+            guard let decoded = decodeBridgeConnectedClient(from: value) else {
+                continue
+            }
+
+            if dedupedByID[decoded.clientDeviceId] == nil {
+                order.append(decoded.clientDeviceId)
+            }
+            if let existing = dedupedByID[decoded.clientDeviceId] {
+                dedupedByID[decoded.clientDeviceId] = mergeConnectedClient(existing: existing, incoming: decoded)
+            } else {
+                dedupedByID[decoded.clientDeviceId] = decoded
+            }
+        }
+
+        return order.compactMap { dedupedByID[$0] }
+    }
+
+    private func decodeClientValues(from value: JSONValue) -> [JSONValue] {
+        if let arrayValues = value.arrayValue {
+            return arrayValues
+        }
+
+        if let objectValues = value.objectValue {
+            return Array(objectValues.values)
+        }
+
+        return [value]
+    }
+
+    private func decodeBridgeConnectedClient(from value: JSONValue) -> CodexBridgeConnectedClient? {
+        if let stringValue = normalizedDeviceIDString(from: value) {
+            return CodexBridgeConnectedClient(
+                clientDeviceId: stringValue,
+                clientType: nil,
+                clientName: nil,
+                keyEpoch: 0,
+                isResumed: false
+            )
+        }
+
+        guard let clientObject = value.objectValue else {
+            return nil
+        }
+
+        let clientDeviceId = firstStringValue(
+            in: clientObject,
+            keys: ["clientDeviceId", "client_device_id", "deviceId", "device_id", "id", "phoneDeviceId", "phone_device_id"]
+        )
+        guard let clientDeviceId else {
+            return nil
+        }
+
+        let keyEpoch = firstIntValue(in: clientObject, keys: ["keyEpoch", "key_epoch", "epoch"]) ?? 0
+        let isResumed = firstBoolValue(in: clientObject, keys: ["isResumed", "is_resumed", "resumed"]) ?? false
+        let clientType = firstStringValue(
+            in: clientObject,
+            keys: ["clientType", "client_type", "type"]
+        ).flatMap(CodexSecureClientType.init(rawValue:))
+        let clientName = firstStringValue(
+            in: clientObject,
+            keys: ["clientName", "client_name", "name", "displayName", "display_name", "title"]
+        )
+
+        return CodexBridgeConnectedClient(
+            clientDeviceId: clientDeviceId,
+            clientType: clientType,
+            clientName: clientName,
+            keyEpoch: keyEpoch,
+            isResumed: isResumed
+        )
+    }
+
+    private func mergeConnectedClient(
+        existing: CodexBridgeConnectedClient,
+        incoming: CodexBridgeConnectedClient
+    ) -> CodexBridgeConnectedClient {
+        CodexBridgeConnectedClient(
+            clientDeviceId: existing.clientDeviceId,
+            clientType: existing.clientType ?? incoming.clientType,
+            clientName: existing.clientName ?? incoming.clientName,
+            keyEpoch: max(existing.keyEpoch, incoming.keyEpoch),
+            isResumed: existing.isResumed || incoming.isResumed
+        )
+    }
+
+    private func decodeDeviceIDs(from value: JSONValue) -> [String] {
+        if let arrayValue = value.arrayValue {
+            return arrayValue.compactMap { element in
+                if let stringValue = normalizedDeviceIDString(from: element) {
+                    return stringValue
+                }
+                guard let objectValue = element.objectValue else {
+                    return nil
+                }
+                return firstStringValue(
+                    in: objectValue,
+                    keys: ["clientDeviceId", "client_device_id", "deviceId", "device_id", "id", "phoneDeviceId", "phone_device_id"]
+                )
+            }
+        }
+
+        if let objectValue = value.objectValue {
+            let nestedIDs = objectValue.values.compactMap { element in
+                if let stringValue = normalizedDeviceIDString(from: element) {
+                    return stringValue
+                }
+                guard let nestedObject = element.objectValue else {
+                    return nil
+                }
+                return firstStringValue(
+                    in: nestedObject,
+                    keys: ["clientDeviceId", "client_device_id", "deviceId", "device_id", "id", "phoneDeviceId", "phone_device_id"]
+                )
+            }
+            if !nestedIDs.isEmpty {
+                return nestedIDs
+            }
+            return objectValue.keys.compactMap { normalizedDeviceIDString(from: .string($0)) }
+        }
+
+        return normalizedDeviceIDString(from: value).map { [$0] } ?? []
+    }
+
+    private func normalizedDeviceIDString(from value: JSONValue) -> String? {
+        guard let stringValue = value.stringValue?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !stringValue.isEmpty else {
+            return nil
+        }
+        return stringValue
+    }
+
+    private func mergeUniqueDeviceIDs(_ primary: [String], _ secondary: [String]) -> [String] {
+        var seen: Set<String> = []
+        var ordered: [String] = []
+
+        for value in primary + secondary {
+            let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !trimmed.isEmpty else {
+                continue
+            }
+            if seen.insert(trimmed).inserted {
+                ordered.append(trimmed)
+            }
+        }
+
+        return ordered
     }
 
     #if os(macOS)
@@ -1229,6 +1408,18 @@ extension CodexService {
         return true
     }
 
+    private func shouldSuppressBridgeSettingsError(_ error: Error) -> Bool {
+        if let serviceError = error as? CodexServiceError,
+           case .disconnected = serviceError {
+            return true
+        }
+
+        let normalizedMessage = error.localizedDescription
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .lowercased()
+        return normalizedMessage == "websocket not connected"
+    }
+
     private func shouldTreatAsUnsupportedBridgeSettingsRead(_ error: Error) -> Bool {
         guard let serviceError = error as? CodexServiceError,
               case .rpcError(let rpcError) = serviceError else {
@@ -1254,10 +1445,6 @@ extension CodexService {
         }
 
         return mentionsUnsupportedMethod && mentionsBridgeSettingsMethod
-    }
-
-    private func unsupportedBridgeSettingsMessage() -> String {
-        "This Mac runtime does not support bridge access details yet. Update Remodex on your Mac to view QR and live connected clients."
     }
 
     private func legacyConnectedClientName(
